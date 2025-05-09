@@ -18,6 +18,10 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "default_key")
 CHAT_ID_1 = int(os.getenv("CHAT_ID_1", 0))
 CHAT_ID_2 = int(os.getenv("CHAT_ID_2", 0))
 
+# ID администраторов
+admin_ids_str = os.getenv("ADMIN_IDS", "")
+ADMIN_IDS = [int(admin_id.strip()) for admin_id in admin_ids_str.split(",") if admin_id.strip().isdigit()]
+
 # Информация о чатах
 CHATS = {
     CHAT_ID_1: {

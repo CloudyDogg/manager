@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from config import BOT_TOKEN, CHAT_ID_1, CHAT_ID_2, CHATS, MESSAGES
+from config import BOT_TOKEN, CHAT_ID_1, CHAT_ID_2, CHATS, MESSAGES, ADMIN_IDS
 from db_manager import DBManager
 from chat_manager import chat_manager
 from session_manager import session_manager
@@ -26,9 +26,6 @@ class AdminStates(StatesGroup):
     managing_accounts = State()
     adding_account = State()
     confirming_code = State()
-
-# Список ID администраторов (временно захардкожено, в будущем можно вынести в БД или конфиг)
-ADMIN_IDS = [123456789, 987654321]  # Замените на реальные ID администраторов
 
 # Функции для проверки, является ли пользователь администратором
 def is_admin(user_id: int) -> bool:

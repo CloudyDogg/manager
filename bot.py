@@ -1125,23 +1125,35 @@ async def check_pending_manual_requests():
     Проверяет наличие заявок, ожидающих ручного добавления, и отправляет 
     обобщенное уведомление администраторам (без кнопок и отдельных сообщений)
     """
+    # Проверяем, включена ли функция уведомлений о заявках при запуске
+    notify_on_startup = get_setting("notify_on_startup", "false")
+    if notify_on_startup.lower() != "true":
+        logger.info("Уведомления о заявках при запуске отключены в настройках")
+        return
+    
     logger.info("Проверка наличия заявок, ожидающих ручного добавления...")
     
     session = get_session()
     try:
-        # Получаем все заявки со статусом manual_check
-        pending_requests = session.query(JoinRequest).filter_by(status="manual_check").all()
+        # Получаем актуальные заявки со статусом manual_check
+        # Добавляем временное ограничение - заявки не старше 7 дней
+        time_limit = datetime.now() - timedelta(days=7)
+        pending_requests = session.query(JoinRequest).filter(
+            JoinRequest.status == "manual_check",
+            JoinRequest.created_at >= time_limit
+        ).all()
         
         if not pending_requests:
-            logger.info("Заявок, ожидающих ручного добавления, не найдено")
+            logger.info("Актуальных заявок, ожидающих ручного добавления, не найдено")
             return
         
         count = len(pending_requests)
-        logger.info(f"Найдено {count} заявок, ожидающих ручного добавления")
+        logger.info(f"Найдено {count} актуальных заявок, ожидающих ручного добавления")
         
         # Отправляем ОДНО общее уведомление админам (без отдельных сообщений о каждой заявке)
-        admin_text = f"📋 При запуске бота обнаружено {count} заявок, ожидающих проверки.\n\n"
-        admin_text += "Для просмотра и обработки заявок используйте команду /admin и выберите 'Активные заявки'.\n"
+        admin_text = f"📋 При запуске бота обнаружено {count} актуальных заявок, ожидающих проверки.\n\n"
+        admin_text += "Для просмотра и обработки заявок используйте команду /admin и выберите 'Активные заявки'.\n\n"
+        admin_text += "Чтобы отключить это уведомление, используйте команду /settings."
         
         for admin_id in ADMIN_IDS:
             try:
@@ -1187,19 +1199,23 @@ async def startup():
         session.close()
     
     # Инициализация настроек
-    logger.info("Проверка настройки auto_add_enabled...")
-    auto_add_value = get_setting("auto_add_enabled")
+    logger.info("Проверка настроек...")
     
+    # Настройка автодобавления
+    auto_add_value = get_setting("auto_add_enabled")
     if auto_add_value is None:
         logger.info("Настройка auto_add_enabled не найдена. Инициализация со значением 'true'...")
         set_setting("auto_add_enabled", "true")
-        logger.info("Настройка auto_add_enabled создана со значением 'true'")
-    else:
-        logger.info(f"Настройка auto_add_enabled найдена. Текущее значение: '{auto_add_value}'")
     
-    # Повторная проверка настройки
-    current_value = get_setting("auto_add_enabled", "true")
-    logger.info(f"Итоговое значение настройки auto_add_enabled: '{current_value}'")
+    # Настройка уведомлений при запуске
+    notify_value = get_setting("notify_on_startup")
+    if notify_value is None:
+        logger.info("Настройка notify_on_startup не найдена. Инициализация со значением 'false'...")
+        set_setting("notify_on_startup", "false")
+    
+    # Логируем финальные значения
+    logger.info(f"auto_add_enabled: {get_setting('auto_add_enabled', 'true')}")
+    logger.info(f"notify_on_startup: {get_setting('notify_on_startup', 'false')}")
     
     # Запуск бота
     logger.info("Запуск бота...")
@@ -1212,6 +1228,204 @@ async def startup():
     # Бесконечный цикл для поддержания работы бота
     while True:
         await asyncio.sleep(3600)  # Ждем 1 час
+        
+# Добавляем команду для настройки бота
+@bot.on_message(filters.command("settings") & filters.private & filters.user(ADMIN_IDS))
+async def settings_command(client, message):
+    """
+    Настройки бота
+    """
+    auto_add_enabled = get_setting("auto_add_enabled", "true")
+    auto_add_status = "✅ Включено" if auto_add_enabled.lower() == "true" else "❌ Отключено"
+    
+    notify_on_startup = get_setting("notify_on_startup", "false")
+    notify_status = "✅ Включено" if notify_on_startup.lower() == "true" else "❌ Отключено"
+    
+    settings_text = "⚙️ Настройки бота:\n\n"
+    settings_text += f"🔄 Автоматическое добавление: {auto_add_status}\n"
+    settings_text += f"🔔 Уведомления о заявках при запуске: {notify_status}\n"
+    
+    # Создаем кнопки для изменения настроек
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(
+            "🔄 Автодобавление: выключить" if auto_add_enabled.lower() == "true" else "🔄 Автодобавление: включить", 
+            callback_data="toggle_auto_add_off" if auto_add_enabled.lower() == "true" else "toggle_auto_add_on"
+        )],
+        [types.InlineKeyboardButton(
+            "🔔 Уведомления при запуске: выключить" if notify_on_startup.lower() == "true" else "🔔 Уведомления при запуске: включить", 
+            callback_data="toggle_notify_off" if notify_on_startup.lower() == "true" else "toggle_notify_on"
+        )],
+        [types.InlineKeyboardButton("↩️ Назад в меню администратора", callback_data="back_to_admin")]
+    ])
+    
+    await message.reply(settings_text, reply_markup=keyboard)
+
+@bot.on_callback_query(filters.regex(r"^toggle_notify_on$"))
+async def toggle_notify_on_callback(client, callback_query):
+    """
+    Включение уведомлений о заявках при запуске бота
+    """
+    try:
+        # Устанавливаем флаг в значение true
+        old_value = get_setting("notify_on_startup", "false")
+        logger.info(f"Текущее значение notify_on_startup перед включением: {old_value}")
+        
+        # Принудительно устанавливаем новое значение
+        set_setting("notify_on_startup", "true")
+        logger.info(f"Администратор {callback_query.from_user.id} включил уведомления о заявках при запуске")
+        
+        # Проверяем, что значение успешно изменено
+        new_value = get_setting("notify_on_startup", "false")
+        logger.info(f"Новое значение notify_on_startup после включения: {new_value}")
+        
+        # Уведомляем администратора
+        await callback_query.answer("✅ Уведомления о заявках при запуске включены")
+        
+        # Обновляем меню настроек
+        await update_settings_menu(client, callback_query)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при включении уведомлений: {e}")
+        await callback_query.answer("❌ Произошла ошибка при включении уведомлений")
+
+@bot.on_callback_query(filters.regex(r"^toggle_notify_off$"))
+async def toggle_notify_off_callback(client, callback_query):
+    """
+    Отключение уведомлений о заявках при запуске бота
+    """
+    try:
+        # Устанавливаем флаг в значение false
+        old_value = get_setting("notify_on_startup", "false")
+        logger.info(f"Текущее значение notify_on_startup перед отключением: {old_value}")
+        
+        # Принудительно устанавливаем новое значение
+        set_setting("notify_on_startup", "false")
+        logger.info(f"Администратор {callback_query.from_user.id} отключил уведомления о заявках при запуске")
+        
+        # Проверяем, что значение успешно изменено
+        new_value = get_setting("notify_on_startup", "false")
+        logger.info(f"Новое значение notify_on_startup после отключения: {new_value}")
+        
+        # Уведомляем администратора
+        await callback_query.answer("✅ Уведомления о заявках при запуске отключены")
+        
+        # Обновляем меню настроек
+        await update_settings_menu(client, callback_query)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при отключении уведомлений: {e}")
+        await callback_query.answer("❌ Произошла ошибка при отключении уведомлений")
+
+async def update_settings_menu(client, callback_query):
+    """
+    Обновляет меню настроек
+    """
+    auto_add_enabled = get_setting("auto_add_enabled", "true")
+    auto_add_status = "✅ Включено" if auto_add_enabled.lower() == "true" else "❌ Отключено"
+    
+    notify_on_startup = get_setting("notify_on_startup", "false")
+    notify_status = "✅ Включено" if notify_on_startup.lower() == "true" else "❌ Отключено"
+    
+    settings_text = "⚙️ Настройки бота:\n\n"
+    settings_text += f"🔄 Автоматическое добавление: {auto_add_status}\n"
+    settings_text += f"🔔 Уведомления о заявках при запуске: {notify_status}\n"
+    
+    # Создаем кнопки для изменения настроек
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton(
+            "🔄 Автодобавление: выключить" if auto_add_enabled.lower() == "true" else "🔄 Автодобавление: включить", 
+            callback_data="toggle_auto_add_off" if auto_add_enabled.lower() == "true" else "toggle_auto_add_on"
+        )],
+        [types.InlineKeyboardButton(
+            "🔔 Уведомления при запуске: выключить" if notify_on_startup.lower() == "true" else "🔔 Уведомления при запуске: включить", 
+            callback_data="toggle_notify_off" if notify_on_startup.lower() == "true" else "toggle_notify_on"
+        )],
+        [types.InlineKeyboardButton("↩️ Назад в меню администратора", callback_data="back_to_admin")]
+    ])
+    
+    try:
+        await callback_query.edit_message_text(settings_text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении меню настроек: {e}")
+        
+# После изменения автодобавления, также обновляем меню настроек
+@bot.on_callback_query(filters.regex(r"^toggle_auto_add_on$"))
+async def toggle_auto_add_on_callback(client, callback_query):
+    """
+    Включение автоматического добавления пользователей
+    """
+    try:
+        # Устанавливаем флаг в значение true
+        old_value = get_setting("auto_add_enabled", "true")
+        logger.info(f"Текущее значение auto_add_enabled перед включением: {old_value}")
+        
+        # Принудительно устанавливаем новое значение
+        set_setting("auto_add_enabled", "true")
+        logger.info(f"Администратор {callback_query.from_user.id} включил автоматическое добавление")
+        
+        # Проверяем, что значение успешно изменено
+        new_value = get_setting("auto_add_enabled", "true")
+        logger.info(f"Новое значение auto_add_enabled после включения: {new_value}")
+        
+        # Уведомляем администратора
+        await callback_query.answer("✅ Автоматическое добавление пользователей включено")
+        
+        # Обновляем меню настроек
+        await update_settings_menu(client, callback_query)
+        
+        # Уведомляем других администраторов
+        actor = callback_query.from_user
+        notification = f"ℹ️ Администратор {actor.first_name} (@{actor.username or 'нет'}) включил автоматическое добавление пользователей."
+        
+        for admin_id in ADMIN_IDS:
+            if admin_id != callback_query.from_user.id:  # Не отправляем уведомление тому, кто включил
+                try:
+                    await client.send_message(admin_id, notification)
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
+    
+    except Exception as e:
+        logger.error(f"Ошибка при включении автодобавления: {e}")
+        await callback_query.answer("❌ Произошла ошибка при включении автодобавления")
+
+@bot.on_callback_query(filters.regex(r"^toggle_auto_add_off$"))
+async def toggle_auto_add_off_callback(client, callback_query):
+    """
+    Отключение автоматического добавления пользователей
+    """
+    try:
+        # Устанавливаем флаг в значение false
+        old_value = get_setting("auto_add_enabled", "true")
+        logger.info(f"Текущее значение auto_add_enabled перед отключением: {old_value}")
+        
+        # Принудительно устанавливаем новое значение
+        set_setting("auto_add_enabled", "false")
+        logger.info(f"Администратор {callback_query.from_user.id} отключил автоматическое добавление")
+        
+        # Проверяем, что значение успешно изменено
+        new_value = get_setting("auto_add_enabled", "false")
+        logger.info(f"Новое значение auto_add_enabled после отключения: {new_value}")
+        
+        # Уведомляем администратора
+        await callback_query.answer("✅ Автоматическое добавление пользователей отключено")
+        
+        # Обновляем меню настроек
+        await update_settings_menu(client, callback_query)
+        
+        # Уведомляем других администраторов
+        actor = callback_query.from_user
+        notification = f"ℹ️ Администратор {actor.first_name} (@{actor.username or 'нет'}) отключил автоматическое добавление пользователей.\nПользователи будут добавляться только вручную через команду /admin."
+        
+        for admin_id in ADMIN_IDS:
+            if admin_id != callback_query.from_user.id:  # Не отправляем уведомление тому, кто отключил
+                try:
+                    await client.send_message(admin_id, notification)
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
+    
+    except Exception as e:
+        logger.error(f"Ошибка при отключении автодобавления: {e}")
+        await callback_query.answer("❌ Произошла ошибка при отключении автодобавления")
 
 async def shutdown():
     """

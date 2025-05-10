@@ -219,10 +219,8 @@ async def switch_to_next_admin():
 
 async def add_user_to_chat(user_id, chat_id):
     """
-    Прямое добавление пользователя в чат
+    Прямое добавление пользователя в чат администратором
     """
-    logger.info(f"Начинаем процесс добавления пользователя {user_id} в чат {chat_id}")
-    
     # Проверяем, включено ли автоматическое добавление
     auto_add_enabled = get_setting("auto_add_enabled", "true")
     logger.info(f"Статус автодобавления: auto_add_enabled = '{auto_add_enabled}'")
@@ -233,158 +231,51 @@ async def add_user_to_chat(user_id, chat_id):
     
     logger.info(f"✅ Автоматическое добавление включено. Начинаем добавление пользователя {user_id}")
     
+    admin_client = await get_admin_client()
+    if not admin_client:
+        logger.error(f"Нет доступного администратора")
+        return False, "Нет доступного администратора для добавления в чат"
+    
+    # Определяем имя чата
+    chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
+    
     try:
-        # Определяем имя чата
-        chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
-        
-        # Получаем администратора
-        admin_client = await get_admin_client()
-        if not admin_client:
-            logger.error(f"Нет доступного администратора")
-            return False, "Нет доступного администратора для добавления в чат"
-        
-        # Находим целевой чат
-        logger.info(f"Поиск чата {chat_id}")
-        target_chat = None
-        
-        # Получаем список диалогов
+        # Получаем список всех чатов для админа
+        logger.info("Получаем список чатов")
+        dialogs = []
         async for dialog in admin_client.get_dialogs():
+            dialogs.append(dialog)
             logger.info(f"Найден чат: {dialog.chat.title or dialog.chat.first_name} (ID: {dialog.chat.id})")
-            if dialog.chat.id == chat_id or (chat_id in [CHAT_ID_1, CHAT_ID_2] and dialog.chat.title == "test"):
+        
+        # Ищем чат с заголовком "test"
+        target_chat = None
+        for dialog in dialogs:
+            if dialog.chat.title == "test":
                 target_chat = dialog.chat
-                logger.info(f"Найден целевой чат: {dialog.chat.title} (ID: {dialog.chat.id})")
+                logger.info(f"Найден нужный чат: {dialog.chat.title} (ID: {dialog.chat.id})")
                 break
         
         if not target_chat:
-            logger.error(f"Целевой чат {chat_id} не найден")
-            return False, f"Чат с ID {chat_id} не найден"
+            logger.error("Не удалось найти целевой чат")
+            return False, "Не удалось найти чат для добавления"
         
-        # ПРИНУДИТЕЛЬНОЕ ДОБАВЛЕНИЕ - метод 1: Создание чата с пользователями
-        logger.info(f"Принудительное добавление пользователя {user_id} в чат {target_chat.id}")
+        # Прямое добавление через администратора
+        logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {target_chat.id}")
         
         try:
-            # Пытаемся сначала добавить пользователя напрямую через InviteToChannel
-            from pyrogram.raw.functions.channels import InviteToChannel
-            from pyrogram.raw.types import InputUserSelf
-            
-            # Получаем peer пользователя
+            # Вначале попробуем стандартный метод add_chat_members
             try:
-                user_peer = await admin_client.resolve_peer(user_id)
-                logger.info(f"Получен peer пользователя {user_id}")
-            except Exception as e:
-                logger.error(f"Ошибка получения peer пользователя: {e}")
-                # Создаем InputUser напрямую с нулевым access_hash
-                from pyrogram.raw.types import InputUser
-                user_peer = InputUser(user_id=user_id, access_hash=0)
-                logger.info(f"Создан InputUser вручную для {user_id}")
-            
-            # Получаем peer чата
-            chat_peer = await admin_client.resolve_peer(target_chat.id)
-            
-            # Вызываем API напрямую
-            logger.info(f"Вызываем InviteToChannel напрямую для пользователя {user_id}")
-            result = await admin_client.invoke(
-                InviteToChannel(
-                    channel=chat_peer,
-                    users=[user_peer]
+                user_info = await admin_client.get_users(user_id)
+                logger.info(f"Получена информация о пользователе: {user_info.first_name} {user_info.last_name or ''}")
+                
+                # Пробуем добавить
+                result = await admin_client.add_chat_members(
+                    chat_id=target_chat.id,
+                    user_ids=user_id
                 )
-            )
-            logger.info(f"Результат вызова InviteToChannel: {result}")
-            
-            # Считаем, что пользователь успешно добавлен
-            logger.info(f"Пользователь {user_id} успешно добавлен в чат {target_chat.id}")
-            
-            # Отправляем пользователю сообщение об успешном добавлении
-            await bot.send_message(
-                user_id,
-                f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                f"Можете открыть чат в своем приложении Telegram."
-            )
-            
-            # Обновляем статус заявки
-            session = get_session()
-            try:
-                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                if join_request:
-                    join_request.status = "approved"
-                    join_request.approved_by = 0  # 0 означает автоматическое одобрение системой
-                    join_request.approved_at = datetime.now()
-                    session.commit()
-            except Exception as e:
-                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-            finally:
-                session.close()
-            
-            return True, "Пользователь успешно добавлен в чат"
-            
-        except Exception as e:
-            logger.error(f"Ошибка при методе 1: {e}")
-            
-            # МЕТОД 2: Создание нового контакта и добавление
-            try:
-                logger.info(f"Используем метод 2: Создание контакта для {user_id}")
+                logger.info(f"Пользователь {user_id} успешно добавлен через add_chat_members")
                 
-                # Получаем информацию о пользователе
-                try:
-                    user_info = await admin_client.get_users(user_id)
-                    first_name = user_info.first_name or "User"
-                    last_name = user_info.last_name or ""
-                    phone = user_info.phone_number or ""
-                    logger.info(f"Получена информация о пользователе: {first_name} {last_name}")
-                except Exception as user_info_error:
-                    logger.error(f"Ошибка получения информации о пользователе: {user_info_error}")
-                    first_name = "User"
-                    last_name = ""
-                    phone = ""
-                
-                # Добавляем пользователя в контакты администратора
-                logger.info(f"Добавляем пользователя {user_id} в контакты")
-                
-                from pyrogram.raw.functions.contacts import ImportContacts
-                from pyrogram.raw.types import InputPhoneContact
-                
-                # Генерируем случайный ID для контакта
-                import random
-                client_id = random.randint(0, 2**63 - 1)
-                
-                # Импортируем контакт
-                result = await admin_client.invoke(
-                    ImportContacts(
-                        contacts=[
-                            InputPhoneContact(
-                                client_id=client_id,
-                                phone=phone or f"+{user_id}",
-                                first_name=first_name,
-                                last_name=last_name
-                            )
-                        ]
-                    )
-                )
-                logger.info(f"Результат ImportContacts: {result}")
-                
-                # Пробуем добавить пользователя в чат после добавления в контакты
-                logger.info(f"Пробуем добавить пользователя {user_id} в чат после добавления в контакты")
-                
-                # Еще раз пробуем получить peer пользователя
-                try:
-                    user_peer = await admin_client.resolve_peer(user_id)
-                    logger.info(f"После добавления в контакты: получен peer пользователя {user_id}")
-                except Exception as e:
-                    logger.error(f"После добавления в контакты: ошибка получения peer пользователя: {e}")
-                    from pyrogram.raw.types import InputUser
-                    user_peer = InputUser(user_id=user_id, access_hash=0)
-                    logger.info(f"После добавления в контакты: создан InputUser вручную для {user_id}")
-                
-                # Вызываем API напрямую еще раз
-                result = await admin_client.invoke(
-                    InviteToChannel(
-                        channel=chat_peer,
-                        users=[user_peer]
-                    )
-                )
-                logger.info(f"После добавления в контакты: результат вызова InviteToChannel: {result}")
-                
-                # Отправляем пользователю сообщение об успешном добавлении
+                # Отправляем сообщение об успешном добавлении
                 await bot.send_message(
                     user_id,
                     f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
@@ -405,32 +296,102 @@ async def add_user_to_chat(user_id, chat_id):
                 finally:
                     session.close()
                 
-                return True, "Пользователь успешно добавлен в чат (метод 2)"
+                return True, "Пользователь успешно добавлен в чат"
                 
-            except Exception as method2_error:
-                logger.error(f"Ошибка при методе 2: {method2_error}")
+            except Exception as standard_error:
+                logger.error(f"Ошибка при стандартном методе добавления: {standard_error}")
                 
-                # МЕТОД 3: Прямое добавление через бота
+                # Если стандартный метод не сработал, пробуем через RAW API
                 try:
-                    logger.info(f"Используем метод 3: Добавление через бота для {user_id}")
+                    # Прямой метод через raw API
+                    logger.info(f"Пробуем добавить через raw API")
                     
-                    # Пробуем добавить пользователя напрямую через бота
+                    # Получаем peer для чата и пользователя
+                    chat_peer = await admin_client.resolve_peer(target_chat.id)
+                    
                     try:
-                        bot_peer = await bot.resolve_peer(user_id)
-                        chat_peer = await bot.resolve_peer(target_chat.id)
+                        # Пробуем получить peer пользователя
+                        user_peer = await admin_client.resolve_peer(user_id)
+                    except Exception as peer_error:
+                        logger.error(f"Ошибка получения peer пользователя: {peer_error}")
+                        # Создаем InputPeerUser напрямую
+                        from pyrogram.raw.types import InputPeerUser
+                        user_peer = InputPeerUser(user_id=user_id, access_hash=0)
+                    
+                    # Вызываем InviteToChannel
+                    logger.info(f"Вызов InviteToChannel для пользователя {user_id}")
+                    await admin_client.invoke(
+                        raw.functions.channels.InviteToChannel(
+                            channel=chat_peer,
+                            users=[user_peer]
+                        )
+                    )
+                    
+                    logger.info(f"Пользователь {user_id} успешно добавлен через raw API")
+                    
+                    # Отправляем сообщение об успешном добавлении
+                    await bot.send_message(
+                        user_id,
+                        f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                        f"Можете открыть чат в своем приложении Telegram."
+                    )
+                    
+                    # Обновляем статус заявки
+                    session = get_session()
+                    try:
+                        join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                        if join_request:
+                            join_request.status = "approved"
+                            join_request.approved_by = 0
+                            join_request.approved_at = datetime.now()
+                            session.commit()
+                    except Exception as e:
+                        logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                    finally:
+                        session.close()
+                    
+                    return True, "Пользователь успешно добавлен в чат через raw API"
+                    
+                except Exception as raw_error:
+                    logger.error(f"Ошибка при добавлении через raw API: {raw_error}")
+                    
+                    # Если raw API не помог, попробуем добавить пользователя в контакты
+                    try:
+                        # Добавляем пользователя в контакты
+                        logger.info(f"Пробуем добавить пользователя {user_id} в контакты")
                         
-                        logger.info(f"Бот добавляет пользователя {user_id} в чат {target_chat.id}")
+                        from pyrogram.raw.functions.contacts import ImportContacts
+                        from pyrogram.raw.types import InputPhoneContact
                         
-                        # Попытка добавления через InviteToChannel от имени бота
-                        result = await bot.invoke(
-                            InviteToChannel(
-                                channel=chat_peer,
-                                users=[bot_peer]
+                        # Генерируем случайный ID клиента
+                        import random
+                        client_id = random.randint(0, 2**63 - 1)
+                        
+                        # Импортируем контакт
+                        result = await admin_client.invoke(
+                            ImportContacts(
+                                contacts=[
+                                    InputPhoneContact(
+                                        client_id=client_id,
+                                        phone=f"+{user_id}",  # Используем ID как номер телефона
+                                        first_name=user_info.first_name or "User",
+                                        last_name=user_info.last_name or ""
+                                    )
+                                ]
                             )
                         )
-                        logger.info(f"Результат вызова InviteToChannel через бота: {result}")
+                        logger.info(f"Результат ImportContacts: {result}")
                         
-                        # Отправляем пользователю сообщение об успешном добавлении
+                        # Пробуем добавить пользователя в чат
+                        logger.info(f"Повторная попытка добавления после импорта контакта")
+                        await admin_client.add_chat_members(
+                            chat_id=target_chat.id,
+                            user_ids=user_id
+                        )
+                        
+                        logger.info(f"Пользователь {user_id} успешно добавлен после импорта контакта")
+                        
+                        # Отправляем сообщение об успешном добавлении
                         await bot.send_message(
                             user_id,
                             f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
@@ -451,76 +412,161 @@ async def add_user_to_chat(user_id, chat_id):
                         finally:
                             session.close()
                         
-                        return True, "Пользователь успешно добавлен в чат (метод 3)"
+                        return True, "Пользователь успешно добавлен в чат через контакты"
                         
-                    except Exception as bot_add_error:
-                        logger.error(f"Ошибка при добавлении через бота: {bot_add_error}")
+                    except Exception as import_error:
+                        logger.error(f"Ошибка при импорте контакта: {import_error}")
                         
-                        # Попробуем сделать бота администратором чата
+                        # Если ничего не помогло, отправляем пользователю инструкции как в случае с ограничениями приватности
+                        await bot.send_message(
+                            user_id,
+                            f"🔒 К сожалению, из-за ограничений Telegram мы не можем добавить вас в чат автоматически.\n\n"
+                            f"🔍 Чтобы решить эту проблему, вам необходимо изменить настройки конфиденциальности:\n\n"
+                            f"👉 Откройте настройки Telegram\n"
+                            f"👉 Перейдите в раздел 'Конфиденциальность'\n" 
+                            f"👉 Выберите 'Группы и каналы'\n"
+                            f"👉 Для опции 'Кто может добавить меня в группы' выберите 'Все'\n\n"
+                            f"📱 Вот как это выглядит (смотрите приложенные картинки):\n"
+                        )
+                        
+                        # Отправляем инструкции с картинками
                         try:
-                            logger.info(f"Пытаемся сделать бота администратором в чате {target_chat.id}")
+                            # Отправляем изображения с инструкциями, если они доступны
+                            await bot.send_photo(
+                                user_id,
+                                "screen/1.jpg",
+                                caption="1. Откройте настройки и выберите 'Конфиденциальность'"
+                            )
                             
-                            # Сначала проверим, есть ли у администратора права для назначения админов
-                            chat_member = await admin_client.get_chat_member(target_chat.id, "me")
-                            if chat_member.status in ["creator", "administrator"] and chat_member.can_promote_members:
-                                logger.info(f"Администратор имеет права для назначения админов в чате {target_chat.id}")
-                                
-                                # Получаем информацию о боте
-                                bot_info = await admin_client.get_users(bot.me.id)
-                                logger.info(f"Информация о боте: {bot_info.first_name} (ID: {bot_info.id})")
-                                
-                                # Назначаем бота администратором
-                                await admin_client.promote_chat_member(
-                                    chat_id=target_chat.id,
-                                    user_id=bot.me.id,
-                                    can_invite_users=True,
-                                    can_manage_chat=True
-                                )
-                                logger.info(f"Бот назначен администратором в чате {target_chat.id}")
-                                
-                                # Пробуем снова добавить пользователя через бота
-                                await bot.add_chat_members(target_chat.id, user_id)
-                                logger.info(f"Пользователь {user_id} успешно добавлен ботом после получения прав администратора")
-                                
-                                # Отправляем пользователю сообщение об успешном добавлении
-                                await bot.send_message(
-                                    user_id,
-                                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                                    f"Можете открыть чат в своем приложении Telegram."
-                                )
-                                
-                                # Обновляем статус заявки
-                                session = get_session()
-                                try:
-                                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                                    if join_request:
-                                        join_request.status = "approved"
-                                        join_request.approved_by = 0
-                                        join_request.approved_at = datetime.now()
-                                        session.commit()
-                                except Exception as e:
-                                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                                finally:
-                                    session.close()
-                                
-                                return True, "Пользователь успешно добавлен в чат (через бота-администратора)"
-                            else:
-                                logger.error(f"Администратор не имеет прав для назначения админов в чате {target_chat.id}")
-                                
-                        except Exception as bot_admin_error:
-                            logger.error(f"Ошибка при назначении бота администратором: {bot_admin_error}")
+                            await bot.send_photo(
+                                user_id,
+                                "screen/2.jpg",
+                                caption="2. Выберите 'Группы и каналы'"
+                            )
+                            
+                            await bot.send_photo(
+                                user_id,
+                                "screen/3.jpg",
+                                caption="3. Установите 'Кто может добавить меня в группы' на 'Все'"
+                            )
+                            
+                            await bot.send_message(
+                                user_id,
+                                "🎉 После изменения настроек вернитесь сюда и повторите попытку! Мы сможем добавить вас автоматически."
+                            )
+                            
+                        except Exception as photo_err:
+                            logger.error(f"Ошибка при отправке инструкций с изображениями: {photo_err}")
                         
-                        raise bot_add_error
+                        # Обновляем статус заявки
+                        session = get_session()
+                        try:
+                            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                            if join_request:
+                                join_request.status = "link_sent"
+                                session.commit()
+                        except Exception as db_err:
+                            logger.error(f"Ошибка при обновлении статуса заявки: {db_err}")
+                        finally:
+                            session.close()
                         
-                except Exception as method3_error:
-                    logger.error(f"Ошибка при методе 3: {method3_error}")
+                        # Возвращаем сообщение с информацией о проблеме
+                        return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
+                        
+                raise standard_error
+                
+        except UserAlreadyParticipant:
+            logger.info(f"Пользователь {user_id} уже состоит в чате")
+            
+            await bot.send_message(
+                user_id,
+                f"ℹ️ Вы уже состоите в этом чате. Откройте его в своем приложении Telegram."
+            )
+            
+            # Обновляем статус заявки
+            session = get_session()
+            try:
+                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                if join_request:
+                    join_request.status = "approved"
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+            finally:
+                session.close()
+                
+            return True, "Пользователь уже состоит в чате"
+            
+        except PeerFlood:
+            logger.error(f"Слишком много запросов на добавление, лимит превышен")
+            
+            # Деактивируем текущий аккаунт администратора
+            session = get_session()
+            try:
+                if hasattr(admin_client, '_phone'):
+                    admin_account = session.query(AdminAccount).filter_by(phone=admin_client._phone).first()
+                    if admin_account:
+                        admin_account.active = False
+                        session.commit()
+                        logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за лимита добавлений")
+                else:
+                    logger.warning("Не удалось определить телефон аккаунта для деактивации")
+            except Exception as e:
+                logger.error(f"Ошибка при деактивации аккаунта: {e}")
+            finally:
+                session.close()
+            
+            # Пробуем переключиться на другой аккаунт
+            logger.info("Пробуем переключиться на другой аккаунт администратора")
+            switched = await switch_to_next_admin()
+            
+            if switched:
+                logger.info("Успешно переключились на другой аккаунт, пробуем добавить пользователя снова")
+                
+                # Получаем новый клиент
+                new_admin_client = await get_admin_client()
+                if new_admin_client:
+                    logger.info("Получен новый клиент администратора")
                     
-                    # Если все методы не сработали
-                    return False, f"Не удалось добавить пользователя. Telegram не позволяет добавить этого пользователя напрямую."
+                    # Пробуем добавить пользователя еще раз
+                    try:
+                        # Добавляем пользователя
+                        await new_admin_client.add_chat_members(
+                            chat_id=target_chat.id,
+                            user_ids=user_id
+                        )
+                        logger.info(f"Пользователь {user_id} успешно добавлен в чат после переключения аккаунта")
+                        
+                        # Отправляем уведомление об успешном добавлении
+                        await bot.send_message(
+                            user_id,
+                            f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                            f"Можете открыть чат в своем приложении Telegram."
+                        )
+                        
+                        # Обновляем статус заявки
+                        session = get_session()
+                        try:
+                            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                            if join_request:
+                                join_request.status = "approved"
+                                join_request.approved_by = 0
+                                join_request.approved_at = datetime.now()
+                                session.commit()
+                        except Exception as e:
+                            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                        finally:
+                            session.close()
+                        
+                        return True, "Пользователь успешно добавлен в чат после переключения аккаунта"
+                    except Exception as retry_error:
+                        logger.error(f"Ошибка при повторной попытке добавления после переключения аккаунта: {retry_error}")
+            
+            return False, "Достигнут лимит добавлений. Попробуйте позже."
     
     except Exception as e:
-        logger.error(f"Критическая ошибка при добавлении пользователя: {e}")
-        return False, f"Критическая ошибка: {str(e)}"
+        logger.error(f"Основная ошибка при добавлении пользователя: {type(e).__name__}: {str(e)}")
+        return False, f"Ошибка при добавлении пользователя: {str(e)}"
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):

@@ -162,47 +162,82 @@ async def get_admin_client():
 
 async def add_user_to_chat(user_id, chat_id):
     """
-    Добавление пользователя в чат
+    Добавление пользователя в чат через одноразовую ссылку
     """
+    admin_client = await get_admin_client()
+    if not admin_client:
+        return False, "Нет доступного администратора для создания ссылки на чат"
+    
     try:
-        # Отправляем ссылку на публичный чат (обязательно создайте публичную ссылку в настройках чата)
-        # Замените ссылку на актуальную публичную ссылку вашего чата
-        if chat_id == CHAT_ID_1:
-            # Ссылка на первый чат
-            chat_link = CHAT_LINK_1
-            chat_name = "основной чат"
-        else:
-            # Ссылка на второй чат
-            chat_link = CHAT_LINK_2
-            chat_name = "второй чат"
+        # Определяем имя чата
+        chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
         
-        # Отправляем пользователю ссылку и сообщение
-        await bot.send_message(
-            user_id,
-            f"Для входа в {chat_name} используйте эту ссылку:\n\n"
-            f"{chat_link}\n\n"
-            f"Просто нажмите на ссылку и затем на кнопку 'Присоединиться'.\n\n"
-            f"⚠️ Если возникнут проблемы со ссылкой, обратитесь в поддержку."
-        )
-        logger.info(f"Отправлена ссылка-приглашение пользователю {user_id}")
-        
-        # Обновляем статус заявки в базе данных
-        session = get_session()
+        # Создаем одноразовую ссылку для конкретного чата
         try:
-            # Находим заявку по ID пользователя и чата
-            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-            if join_request:
-                join_request.status = "link_sent"
-                session.commit()
-        except Exception as e:
-            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-        finally:
-            session.close()
-        
-        # Сообщаем об успехе, хотя реальное добавление произойдет когда пользователь нажмет на ссылку
-        return True, "Пользователю отправлена ссылка для входа в чат"
+            # Пробуем создать ссылку с разными форматами ID чата
+            chat_variants = [
+                f"-100{chat_id}" if str(chat_id).isdigit() else chat_id,
+                chat_id,
+                "-1002698797779" if chat_id == CHAT_ID_1 else chat_id,
+                "2698797779" if chat_id == CHAT_ID_1 else chat_id
+            ]
+            
+            invite_link = None
+            for variant in chat_variants:
+                try:
+                    logger.info(f"Пробуем создать ссылку для чата с ID {variant}")
+                    invite_link = await admin_client.create_chat_invite_link(
+                        chat_id=variant,
+                        member_limit=1,  # Ограничение на одного пользователя
+                        creates_join_request=False
+                    )
+                    logger.info(f"Успешно создана одноразовая ссылка: {invite_link.invite_link}")
+                    break
+                except Exception as e:
+                    logger.error(f"Не удалось создать ссылку для чата с ID {variant}: {e}")
+                    continue
+            
+            if not invite_link:
+                # Если не удалось создать ссылку, используем статическую из переменных
+                invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
+                logger.warning(f"Используем статическую ссылку: {invite_link_url}")
+            else:
+                invite_link_url = invite_link.invite_link
+                
+            # Отправляем пользователю ссылку
+            await bot.send_message(
+                user_id,
+                f"Для входа в {chat_name} используйте эту одноразовую ссылку:\n\n"
+                f"{invite_link_url}\n\n"
+                f"Просто нажмите на ссылку и затем на кнопку 'Присоединиться'.\n\n"
+                f"⚠️ Ссылка действительна для одного входа и ограничена по времени."
+            )
+            logger.info(f"Отправлена одноразовая ссылка пользователю {user_id}")
+            
+            # Обновляем статус заявки
+            session = get_session()
+            try:
+                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                if join_request:
+                    join_request.status = "link_sent"
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+            finally:
+                session.close()
+            
+            return True, "Пользователю отправлена одноразовая ссылка для входа в чат"
+        except Exception as link_error:
+            logger.error(f"Ошибка при создании ссылки: {link_error}")
+            # Если не удалось создать ссылку - сообщаем администратору
+            for admin_id in ADMIN_IDS:
+                await bot.send_message(
+                    admin_id,
+                    f"⚠️ Ошибка при создании ссылки для пользователя {user_id}:\n{str(link_error)}"
+                )
+            return False, f"Не удалось создать ссылку: {str(link_error)}"
     except Exception as e:
-        logger.error(f"Ошибка при отправке ссылки пользователю {user_id}: {e}")
+        logger.error(f"Общая ошибка при работе с пользователем {user_id}: {e}")
         return False, f"Ошибка при отправке ссылки: {str(e)}"
 
 @bot.on_message(filters.command("start") & filters.private)

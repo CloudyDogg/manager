@@ -29,8 +29,25 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
-CHAT_ID_1 = int(os.getenv("CHAT_ID_1"))
-CHAT_ID_2 = int(os.getenv("CHAT_ID_2"))
+
+# Преобразуем ID чатов в правильный формат
+CHAT_ID_1_STR = os.getenv("CHAT_ID_1")
+CHAT_ID_2_STR = os.getenv("CHAT_ID_2")
+
+# Функция для преобразования идентификатора чата в формат, понятный Pyrogram
+def convert_chat_id(chat_id_str):
+    if not chat_id_str or chat_id_str == "0":
+        return 0
+    
+    # Если ID начинается с -100, удаляем эти символы и конвертируем в int
+    if chat_id_str.startswith("-100"):
+        return int(chat_id_str[4:])
+    return int(chat_id_str)
+
+CHAT_ID_1 = convert_chat_id(CHAT_ID_1_STR)
+CHAT_ID_2 = convert_chat_id(CHAT_ID_2_STR)
+
+logger.info(f"Используются ID чатов: {CHAT_ID_1}, {CHAT_ID_2}")
 
 # Инициализация бота
 bot = Client("telegram_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -93,7 +110,15 @@ async def add_user_to_chat(user_id, chat_id):
         return False, "Нет доступного администратора для добавления в чат"
     
     try:
-        await admin_client.add_chat_members(chat_id, user_id)
+        # Для суперчатов добавляем префикс -100 для совместимости с Pyrogram
+        if chat_id > 0:
+            pyrogram_chat_id = f"-100{chat_id}"
+        else:
+            pyrogram_chat_id = chat_id
+            
+        logger.info(f"Попытка добавления пользователя {user_id} в чат {pyrogram_chat_id}")
+        
+        await admin_client.add_chat_members(pyrogram_chat_id, user_id)
         return True, "Пользователь успешно добавлен в чат"
     except UserAlreadyParticipant:
         return False, "Пользователь уже в чате"

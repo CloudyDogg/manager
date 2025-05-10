@@ -755,15 +755,7 @@ async def admin_active_requests_callback(client, callback_query):
         
         requests_text = "📋 Активные заявки (ожидают рассмотрения):\n\n"
         
-        # Создаем список кнопок для всех заявок
-        keyboard_buttons = []
-        
-        # Счетчик активных заявок для пронумерованных кнопок
-        request_count = 0
-        
         for req in requests:
-            request_count += 1
-            
             user = session.query(User).filter_by(user_id=req.user_id).first()
             username = f"@{user.username}" if user and user.username else "нет"
             name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
@@ -780,30 +772,17 @@ async def admin_active_requests_callback(client, callback_query):
                 status_emoji = "❓"
                 status_text = req.status
             
-            requests_text += f"{request_count}. ID: {req.user_id}\n"
+            requests_text += f"ID: {req.user_id}\n"
             requests_text += f"Имя: {name}\n"
             requests_text += f"Username: {username}\n"
             requests_text += f"Чат: {chat_name}\n"
             requests_text += f"Статус: {status_emoji} {status_text}\n"
-            requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n"
-            
-            # Если это заявка, ожидающая ручного добавления, добавляем кнопки
-            if req.status == "manual_check":
-                requests_text += f"⚠️ Эта заявка требует ручного добавления (#️⃣{request_count})\n"
-                
-                # Добавляем кнопки для одобрения/отклонения для этой заявки
-                keyboard_buttons.append([
-                    types.InlineKeyboardButton(f"✅ Одобрить #{request_count}", callback_data=f"manual_add_{req.user_id}_{req.chat_id}"),
-                    types.InlineKeyboardButton(f"❌ Отклонить #{request_count}", callback_data=f"manual_reject_{req.user_id}_{req.chat_id}")
-                ])
-            
-            requests_text += "\n"
+            requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
         
         # Добавляем кнопку назад
-        keyboard_buttons.append([types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")])
-        
-        # Создаем клавиатуру из всех кнопок
-        keyboard = types.InlineKeyboardMarkup(keyboard_buttons)
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
         
         await callback_query.edit_message_text(requests_text, reply_markup=keyboard)
     except Exception as e:
@@ -1244,7 +1223,7 @@ if __name__ == "__main__":
 @bot.on_callback_query(filters.regex(r"^manual_add_(\d+)_(-?\d+)$"))
 async def manual_add_callback(client, callback_query):
     """
-    Ручное добавление пользователя администратором
+    Ручное добавление пользователя администратором из уведомления
     """
     try:
         # Извлекаем ID пользователя и чата из callback_data
@@ -1271,9 +1250,6 @@ async def manual_add_callback(client, callback_query):
         # Восстанавливаем предыдущее значение настройки
         set_setting("auto_add_enabled", current_auto_add)
         logger.info(f"Восстановлено предыдущее значение auto_add_enabled: {current_auto_add}")
-        
-        # Определяем, откуда был вызван callback (из списка заявок или из уведомления)
-        is_from_list = "admin_active_requests" in callback_query.message.text
         
         if success:
             # Обновляем статус заявки
@@ -1317,37 +1293,31 @@ async def manual_add_callback(client, callback_query):
                     except Exception as e:
                         logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
             
-            # Обрабатываем успешное добавление в зависимости от источника вызова
-            if is_from_list:
-                # Если вызвано из списка заявок, возвращаемся к списку с обновленной информацией
-                logger.info(f"Возвращаемся к списку активных заявок после успешного добавления пользователя {user_id}")
-                await admin_active_requests_callback(client, callback_query)
-            else:
-                # Если вызвано из уведомления, обновляем текст сообщения
-                admin_text = (
-                    f"✅ Пользователь успешно добавлен:\n\n"
-                    f"ID: {user_id}\n"
-                    f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
-                    f"Username: @{user_info.username or 'отсутствует'}\n\n"
-                    f"Чат: {'Чат #1' if chat_id == CHAT_ID_1 else 'Чат #2'}\n"
-                    f"Добавлен вручную администратором: {callback_query.from_user.first_name}\n"
-                    f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-                )
-                
+            # Обновляем сообщение в интерфейсе администратора
+            admin_text = (
+                f"✅ Пользователь успешно добавлен:\n\n"
+                f"ID: {user_id}\n"
+                f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+                f"Username: @{user_info.username or 'отсутствует'}\n\n"
+                f"Чат: {'Чат #1' if chat_id == CHAT_ID_1 else 'Чат #2'}\n"
+                f"Добавлен вручную администратором: {callback_query.from_user.first_name}\n"
+                f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            )
+            
+            try:
+                # Если сообщение было с фото (caption)
+                await callback_query.edit_message_caption(caption=admin_text)
+                logger.info(f"Обновлено сообщение с фото для администратора")
+            except Exception as caption_err:
+                # Если сообщение было текстовым
+                logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
                 try:
-                    # Если сообщение было с фото (caption)
-                    await callback_query.edit_message_caption(caption=admin_text)
-                    logger.info(f"Обновлено сообщение с фото для администратора")
-                except Exception as caption_err:
-                    # Если сообщение было текстовым
-                    logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
-                    try:
-                        await callback_query.edit_message_text(admin_text)
-                        logger.info(f"Обновлено текстовое сообщение для администратора")
-                    except Exception as text_err:
-                        logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
+                    await callback_query.edit_message_text(admin_text)
+                    logger.info(f"Обновлено текстовое сообщение для администратора")
+                except Exception as text_err:
+                    logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
         else:
-            # Обрабатываем ошибку в зависимости от источника вызова
+            # Обрабатываем ошибку
             error_text = (
                 f"❌ Не удалось добавить пользователя:\n\n"
                 f"ID: {user_id}\n"
@@ -1374,24 +1344,18 @@ async def manual_add_callback(client, callback_query):
             finally:
                 session.close()
             
-            if is_from_list:
-                # Если вызвано из списка заявок, возвращаемся к списку с обновленной информацией
-                logger.info(f"Возвращаемся к списку активных заявок после неудачной попытки добавления пользователя {user_id}")
-                await admin_active_requests_callback(client, callback_query)
-            else:
-                # Если вызвано из уведомления, обновляем текст сообщения
+            try:
+                # Если сообщение было с фото (caption)
+                await callback_query.edit_message_caption(caption=error_text)
+                logger.info(f"Обновлено сообщение с фото для администратора (ошибка)")
+            except Exception as caption_err:
+                # Если сообщение было текстовым
+                logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
                 try:
-                    # Если сообщение было с фото (caption)
-                    await callback_query.edit_message_caption(caption=error_text)
-                    logger.info(f"Обновлено сообщение с фото для администратора (ошибка)")
-                except Exception as caption_err:
-                    # Если сообщение было текстовым
-                    logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
-                    try:
-                        await callback_query.edit_message_text(error_text)
-                        logger.info(f"Обновлено текстовое сообщение для администратора (ошибка)")
-                    except Exception as text_err:
-                        logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
+                    await callback_query.edit_message_text(error_text)
+                    logger.info(f"Обновлено текстовое сообщение для администратора (ошибка)")
+                except Exception as text_err:
+                    logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
                 
     except Exception as e:
         logger.error(f"Ошибка при ручном добавлении пользователя: {e}")
@@ -1400,7 +1364,7 @@ async def manual_add_callback(client, callback_query):
 @bot.on_callback_query(filters.regex(r"^manual_reject_(\d+)_(-?\d+)$"))
 async def manual_reject_callback(client, callback_query):
     """
-    Отклонение заявки на добавление пользователя
+    Отклонение заявки на добавление пользователя из уведомления
     """
     try:
         # Извлекаем ID пользователя и чата из callback_data
@@ -1409,9 +1373,6 @@ async def manual_reject_callback(client, callback_query):
         
         # Сообщаем администратору, что заявка отклонена
         await callback_query.answer("Заявка отклонена")
-        
-        # Определяем, откуда был вызван callback (из списка заявок или из уведомления)
-        is_from_list = "admin_active_requests" in callback_query.message.text
         
         # Обновляем статус заявки
         session = get_session()
@@ -1455,36 +1416,30 @@ async def manual_reject_callback(client, callback_query):
                 except Exception as e:
                     logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
         
-        # Обрабатываем отклонение в зависимости от источника вызова
-        if is_from_list:
-            # Если вызвано из списка заявок, возвращаемся к списку с обновленной информацией
-            logger.info(f"Возвращаемся к списку активных заявок после отклонения заявки пользователя {user_id}")
-            await admin_active_requests_callback(client, callback_query)
-        else:
-            # Если вызвано из уведомления, обновляем текст сообщения
-            admin_text = (
-                f"❌ Заявка отклонена:\n\n"
-                f"ID: {user_id}\n"
-                f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
-                f"Username: @{user_info.username or 'отсутствует'}\n\n"
-                f"Чат: {'Чат #1' if chat_id == CHAT_ID_1 else 'Чат #2'}\n"
-                f"Отклонено администратором: {callback_query.from_user.first_name}\n"
-                f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-            )
-            
+        # Обновляем сообщение в интерфейсе администратора
+        admin_text = (
+            f"❌ Заявка отклонена:\n\n"
+            f"ID: {user_id}\n"
+            f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+            f"Username: @{user_info.username or 'отсутствует'}\n\n"
+            f"Чат: {'Чат #1' if chat_id == CHAT_ID_1 else 'Чат #2'}\n"
+            f"Отклонено администратором: {callback_query.from_user.first_name}\n"
+            f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+        
+        try:
+            # Если сообщение было с фото (caption)
+            await callback_query.edit_message_caption(caption=admin_text)
+            logger.info(f"Обновлено сообщение с фото для администратора")
+        except Exception as caption_err:
+            # Если сообщение было текстовым
+            logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
             try:
-                # Если сообщение было с фото (caption)
-                await callback_query.edit_message_caption(caption=admin_text)
-                logger.info(f"Обновлено сообщение с фото для администратора")
-            except Exception as caption_err:
-                # Если сообщение было текстовым
-                logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
-                try:
-                    await callback_query.edit_message_text(admin_text)
-                    logger.info(f"Обновлено текстовое сообщение для администратора")
-                except Exception as text_err:
-                    logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
-                    
+                await callback_query.edit_message_text(admin_text)
+                logger.info(f"Обновлено текстовое сообщение для администратора")
+            except Exception as text_err:
+                logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
+                
     except Exception as e:
         logger.error(f"Ошибка при отклонении заявки: {e}")
         await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")

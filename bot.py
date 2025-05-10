@@ -768,14 +768,13 @@ async def admin_users_callback(client, callback_query):
                         
                         users_text += f"- {status_emoji} {chat_name}: {status_text} ({req.created_at.strftime('%d.%m.%Y %H:%M')})\n"
                 
-                # Добавляем блокировку/разблокировку через команды
-                users_text += f"Команды: /block {user_db.user_id} | /unblock {user_db.user_id}\n\n"
+                # Убираем команды блокировки/разблокировки
+                users_text += "\n"
                 
             except Exception as user_err:
                 logger.error(f"Ошибка при получении информации о пользователе {user_db.user_id}: {user_err}")
                 users_text += f"{i+1}. <b>{user_db.first_name} {user_db.last_name or ''}</b>\n"
-                users_text += f"ID: <code>{user_db.user_id}</code> | Ошибка получения данных\n"
-                users_text += f"Команды: /block {user_db.user_id} | /unblock {user_db.user_id}\n\n"
+                users_text += f"ID: <code>{user_db.user_id}</code> | Ошибка получения данных\n\n"
         
         # Добавляем кнопку назад
         keyboard = types.InlineKeyboardMarkup([
@@ -807,7 +806,7 @@ async def admin_users_callback(client, callback_query):
 @bot.on_callback_query(filters.regex(r"^admin_active_requests$"))
 async def admin_active_requests_callback(client, callback_query):
     """
-    Список активных заявок через клавиатуру (pending и manual_check)
+    Список активных заявок без лишних кнопок
     """
     session = get_session()
     try:
@@ -826,38 +825,57 @@ async def admin_active_requests_callback(client, callback_query):
         requests_text = "📋 Активные заявки (ожидают рассмотрения):\n\n"
         
         for req in requests:
-            user = session.query(User).filter_by(user_id=req.user_id).first()
-            username = f"@{user.username}" if user and user.username else "нет"
-            name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
-            
-            chat_name = "Чат #1" if req.chat_id == CHAT_ID_1 else "Чат #2"
-            
-            if req.status == "pending":
-                status_emoji = "⏳"
-                status_text = "Обрабатывается"
-            elif req.status == "manual_check":
-                status_emoji = "👨‍💼"
-                status_text = "Ожидает ручного добавления"
-            else:
-                status_emoji = "❓"
-                status_text = req.status
-            
-            requests_text += f"ID: {req.user_id}\n"
-            requests_text += f"Имя: {name}\n"
-            requests_text += f"Username: {username}\n"
-            requests_text += f"Чат: {chat_name}\n"
-            requests_text += f"Статус: {status_emoji} {status_text}\n"
-            requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            try:
+                user = session.query(User).filter_by(user_id=req.user_id).first()
+                username = f"@{user.username}" if user and user.username else "нет"
+                name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
+                
+                # Получаем расширенную информацию через API
+                user_info = await client.get_users(req.user_id)
+                
+                chat_name = "Чат #1" if req.chat_id == CHAT_ID_1 else "Чат #2"
+                
+                # Статусы заявок
+                if req.status == "pending":
+                    status_emoji = "⏳"
+                    status_text = "Обрабатывается"
+                elif req.status == "manual_check":
+                    status_emoji = "👨‍💼"
+                    status_text = "Ожидает ручного добавления"
+                else:
+                    status_emoji = "❓"
+                    status_text = req.status
+                
+                # Получаем дополнительную информацию
+                premium_status = "✅" if hasattr(user_info, "is_premium") and user_info.is_premium else "❌"
+                language_code = user_info.language_code or "неизвестно"
+                is_bot = "✅" if hasattr(user_info, "is_bot") and user_info.is_bot else "❌"
+                is_fake = "✅" if hasattr(user_info, "is_fake") and user_info.is_fake else "❌"
+                is_scam = "✅" if hasattr(user_info, "is_scam") and user_info.is_scam else "❌"
+                
+                # Форматируем информацию о заявке
+                requests_text += f"👤 <b>{name}</b> ({username})\n"
+                requests_text += f"ID: <code>{req.user_id}</code>\n"
+                requests_text += f"Чат: {chat_name}\n"
+                requests_text += f"Статус: {status_emoji} {status_text}\n"
+                requests_text += f"Язык: {language_code} | Premium: {premium_status}\n"
+                requests_text += f"Бот: {is_bot} | Фейк: {is_fake} | Скам: {is_scam}\n"
+                requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+                
+            except Exception as user_err:
+                logger.error(f"Ошибка при получении информации о пользователе {req.user_id}: {user_err}")
+                requests_text += f"ID: {req.user_id}\n"
+                requests_text += f"Ошибка получения данных: {str(user_err)[:100]}\n\n"
         
         # Добавляем кнопку назад
         keyboard = types.InlineKeyboardMarkup([
             [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
         ])
         
-        await callback_query.edit_message_text(requests_text, reply_markup=keyboard)
+        await callback_query.edit_message_text(requests_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         logger.error(f"Ошибка при получении списка активных заявок: {e}")
-        await callback_query.edit_message_text("Произошла ошибка при получении списка активных заявок.")
+        await callback_query.edit_message_text(f"Произошла ошибка при получении списка активных заявок: {str(e)}")
     finally:
         session.close()
 
@@ -1104,7 +1122,8 @@ async def toggle_auto_add_off_callback(client, callback_query):
 
 async def check_pending_manual_requests():
     """
-    Проверяет наличие заявок, ожидающих ручного добавления, и отправляет уведомления администраторам
+    Проверяет наличие заявок, ожидающих ручного добавления, и отправляет 
+    обобщенное уведомление администраторам (без кнопок и отдельных сообщений)
     """
     logger.info("Проверка наличия заявок, ожидающих ручного добавления...")
     
@@ -1117,96 +1136,23 @@ async def check_pending_manual_requests():
             logger.info("Заявок, ожидающих ручного добавления, не найдено")
             return
         
-        logger.info(f"Найдено {len(pending_requests)} заявок, ожидающих ручного добавления")
+        count = len(pending_requests)
+        logger.info(f"Найдено {count} заявок, ожидающих ручного добавления")
         
-        # Отправляем уведомления администраторам о каждой заявке
-        for request in pending_requests:
+        # Отправляем ОДНО общее уведомление админам (без отдельных сообщений о каждой заявке)
+        admin_text = f"📋 При запуске бота обнаружено {count} заявок, ожидающих проверки.\n\n"
+        admin_text += "Для просмотра и обработки заявок используйте команду /admin и выберите 'Активные заявки'.\n"
+        
+        for admin_id in ADMIN_IDS:
             try:
-                user_id = request.user_id
-                chat_id = request.chat_id
-                
-            # Получаем информацию о пользователе
-                user_info = await bot.get_users(user_id)
-                
-                # Собираем дополнительную информацию о пользователе
-                premium_status = "✅" if user_info.is_premium else "❌"
-                language_code = user_info.language_code or "неизвестно"
-                is_bot = "✅" if user_info.is_bot else "❌"
-                is_fake = "✅" if hasattr(user_info, "is_fake") and user_info.is_fake else "❌"
-                is_scam = "✅" if hasattr(user_info, "is_scam") and user_info.is_scam else "❌"
-                
-                # Формируем текст уведомления
-                admin_text = (
-                    f"📝 [ВОССТАНОВЛЕНО] Заявка ожидает ручного добавления:\n\n"
-                    f"👤 <b>Пользователь:</b>\n"
-                    f"ID: <code>{user_id}</code>\n"
-                    f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
-                    f"Username: @{user_info.username or 'отсутствует'}\n\n"
-                    f"📊 <b>Дополнительная информация:</b>\n"
-                    f"Язык: {language_code}\n"
-                    f"Premium: {premium_status}\n"
-                    f"Бот: {is_bot}\n"
-                    f"Фейк: {is_fake}\n"
-                    f"Скам: {is_scam}\n\n"
-                    f"🕒 Дата создания заявки: {request.created_at.strftime('%d.%m.%Y %H:%M')}\n"
-                    f"⚠️ Внимание: эта заявка была обнаружена при перезапуске бота\n"
+                await bot.send_message(
+                    admin_id,
+                    admin_text,
+                    parse_mode=enums.ParseMode.HTML
                 )
-                
-                # Создаем кнопки для добавления пользователя
-                chat_name = "Чат #1" if chat_id == CHAT_ID_1 else "Чат #2"
-                keyboard = types.InlineKeyboardMarkup([
-                    [types.InlineKeyboardButton(f"✅ Добавить в {chat_name}", callback_data=f"manual_add_{user_id}_{chat_id}")],
-                    [types.InlineKeyboardButton("❌ Отклонить", callback_data=f"manual_reject_{user_id}_{chat_id}")]
-                ])
-                
-                # Отправляем уведомление всем администраторам
-                for admin_id in ADMIN_IDS:
-                    try:
-                        # Пытаемся отправить фото профиля
-                        try:
-                            profile_photos = await bot.get_profile_photos(user_id, limit=1)
-                            if profile_photos.total_count > 0:
-                                await bot.send_photo(
-                                    admin_id,
-                                    profile_photos.photos[0][0].file_id,
-                                    caption=admin_text,
-                                    reply_markup=keyboard,
-                                    parse_mode=enums.ParseMode.HTML
-                                )
-                                logger.info(f"Администратору {admin_id} отправлено уведомление с фото о заявке пользователя {user_id}")
-                            else:
-                                await bot.send_message(
-                                    admin_id,
-                                    admin_text,
-                                    reply_markup=keyboard,
-                                    parse_mode=enums.ParseMode.HTML
-                                )
-                                logger.info(f"Администратору {admin_id} отправлено текстовое уведомление о заявке пользователя {user_id}")
-                        except Exception as photo_err:
-                            logger.error(f"Ошибка при отправке фото профиля: {photo_err}")
-                            await bot.send_message(
-                                admin_id,
-                                admin_text,
-                                reply_markup=keyboard,
-                                parse_mode=enums.ParseMode.HTML
-                            )
-                            logger.info(f"Администратору {admin_id} отправлено текстовое уведомление о заявке пользователя {user_id}")
-                    except Exception as e:
-                        logger.error(f"Не удалось отправить уведомление администратору {admin_id} о заявке пользователя {user_id}: {e}")
-                
-                # Отправляем пользователю напоминание
-                try:
-                    await bot.send_message(
-                        user_id,
-                        "⏳ Напоминаем, что ваша заявка на вступление в чат находится на рассмотрении у администратора.\n\n"
-                        "Вы будете уведомлены, когда администратор примет решение."
-                    )
-                    logger.info(f"Отправлено напоминание пользователю {user_id} о рассмотрении заявки")
-                except Exception as user_msg_err:
-                    logger.error(f"Ошибка при отправке напоминания пользователю {user_id}: {user_msg_err}")
-                
-            except Exception as request_err:
-                logger.error(f"Ошибка при обработке заявки {request.id} пользователя {request.user_id}: {request_err}")
+                logger.info(f"Администратору {admin_id} отправлено обобщенное уведомление о {count} заявках")
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
         
     except Exception as e:
         logger.error(f"Ошибка при проверке заявок, ожидающих ручного добавления: {e}")

@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from pyrogram import Client, filters, types, errors, raw
 from pyrogram.raw import functions
-from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood
+from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood, InviteHashExpired
 from cryptography.fernet import Fernet
 import json
 from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key
@@ -31,57 +31,20 @@ API_HASH = os.getenv("API_HASH")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
-# Преобразуем ID чатов в правильный формат
+# Получаем ID чатов напрямую из переменных окружения
 CHAT_ID_1_STR = os.getenv("CHAT_ID_1")
 CHAT_ID_2_STR = os.getenv("CHAT_ID_2")
 
-# Функция для преобразования идентификатора чата в формат, понятный Pyrogram
-def convert_chat_id(chat_id_str):
-    if not chat_id_str or chat_id_str == "0":
-        return 0
-    
-    # Если ID начинается с -100, удаляем эти символы и конвертируем в int
-    if chat_id_str.startswith("-100"):
-        return int(chat_id_str[4:])
-    return int(chat_id_str)
+# Прямое использование ID чатов
+CHAT_ID_1 = int(CHAT_ID_1_STR) if CHAT_ID_1_STR and CHAT_ID_1_STR != "0" else 0
+CHAT_ID_2 = int(CHAT_ID_2_STR) if CHAT_ID_2_STR and CHAT_ID_2_STR != "0" else 0
 
-# Функция для получения правильного ID чата для Pyrogram
-def get_pyrogram_chat_id(chat_id):
-    """
-    Преобразует ID чата в формат, подходящий для Pyrogram
-    """
-    # Преобразуем всё в строку для обработки
-    chat_id_str = str(chat_id)
-    
-    # Удаляем дублирующийся префикс -100, если он есть
-    if chat_id_str.startswith("-100") and chat_id_str.count("-100") > 1:
-        return chat_id_str.replace("-100", "", 1)  # Удаляем только первое вхождение
-        
-    # Если это уже строка с префиксом -100, просто возвращаем
-    if chat_id_str.startswith("-100"):
-        return chat_id_str
-    
-    # Если это число или строка без префикса, добавляем префикс
-    if chat_id_str.lstrip('-').isdigit():
-        if chat_id_str.startswith('-'):
-            # Если уже отрицательное число, но без -100
-            return f"-100{chat_id_str[1:]}"
-        else:
-            # Положительное число
-            return f"-100{chat_id_str}"
-    
-    # Если это другой формат, возвращаем как есть
-    return chat_id
-
-CHAT_ID_1 = convert_chat_id(CHAT_ID_1_STR)
-CHAT_ID_2 = convert_chat_id(CHAT_ID_2_STR)
-
-# Ссылки на чаты (добавьте в файл .env)
-CHAT_LINK_1 = os.getenv("CHAT_LINK_1", "https://t.me/+vUfNTKnmWr4wMDVi")  # Создайте пригласительную ссылку в Telegram
-CHAT_LINK_2 = os.getenv("CHAT_LINK_2", "https://t.me/+vUfNTKnmWr4wMDVi")  # И добавьте в .env
+# Запасные ссылки на чаты
+CHAT_LINK_1 = os.getenv("CHAT_LINK_1", "")
+CHAT_LINK_2 = os.getenv("CHAT_LINK_2", "")
 
 logger.info(f"Используются ID чатов: {CHAT_ID_1}, {CHAT_ID_2}")
-logger.info(f"Ссылки на чаты: {CHAT_LINK_1}, {CHAT_LINK_2}")
+logger.info(f"Запасные ссылки на чаты: {CHAT_LINK_1}, {CHAT_LINK_2}")
 
 # Инициализация бота
 bot = Client("telegram_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -96,15 +59,16 @@ async def get_admin_client():
     global active_admin_client
     
     # Если клиент уже создан и активен, возвращаем его
-    if active_admin_client and hasattr(active_admin_client, 'is_connected') and active_admin_client.is_connected:
+    if active_admin_client and active_admin_client.is_connected:
+        logger.info("Используем существующий клиент администратора")
         return active_admin_client
     
     # Если клиент существует, но не активен, пытаемся остановить его
     if active_admin_client:
         try:
             await active_admin_client.stop()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Ошибка при остановке клиента: {e}")
         active_admin_client = None
     
     session = get_session()
@@ -153,6 +117,10 @@ async def get_admin_client():
             return client
         except Exception as e:
             logger.error(f"Ошибка при инициализации клиента: {e}")
+            # Деактивируем проблемный аккаунт
+            admin_account.active = False
+            session.commit()
+            logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за ошибки")
             return None
     except Exception as e:
         logger.error(f"Ошибка при получении клиента администратора: {e}")
@@ -166,78 +134,132 @@ async def add_user_to_chat(user_id, chat_id):
     """
     admin_client = await get_admin_client()
     if not admin_client:
+        logger.error(f"Не удалось получить администратора для пользователя {user_id}")
         return False, "Нет доступного администратора для создания ссылки на чат"
     
+    # Определяем имя чата
+    chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
+    
     try:
-        # Определяем имя чата
-        chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
+        # Логируем все доступные чаты для отладки
+        logger.info(f"Получаем список всех чатов для администратора")
+        available_chats = []
         
-        # Создаем одноразовую ссылку для конкретного чата
-        try:
-            # Пробуем создать ссылку с разными форматами ID чата
-            chat_variants = [
-                f"-100{chat_id}" if str(chat_id).isdigit() else chat_id,
-                chat_id,
-                "-1002698797779" if chat_id == CHAT_ID_1 else chat_id,
-                "2698797779" if chat_id == CHAT_ID_1 else chat_id
-            ]
-            
-            invite_link = None
-            for variant in chat_variants:
-                try:
-                    logger.info(f"Пробуем создать ссылку для чата с ID {variant}")
-                    invite_link = await admin_client.create_chat_invite_link(
-                        chat_id=variant,
-                        member_limit=1,  # Ограничение на одного пользователя
-                        creates_join_request=False
-                    )
-                    logger.info(f"Успешно создана одноразовая ссылка: {invite_link.invite_link}")
+        async for dialog in admin_client.get_dialogs():
+            chat_info = {
+                "title": dialog.chat.title or dialog.chat.first_name,
+                "id": dialog.chat.id,
+                "type": dialog.chat.type
+            }
+            available_chats.append(chat_info)
+            logger.info(f"Найден чат: {chat_info['title']} (ID: {chat_info['id']}, Тип: {chat_info['type']})")
+        
+        # Попытка найти нужный чат среди доступных
+        target_chat = None
+        
+        # 1. Сначала ищем по заголовку "test"
+        for chat in available_chats:
+            if chat["title"] == "test":
+                target_chat = chat
+                logger.info(f"Найден чат test по заголовку, ID: {chat['id']}")
+                break
+        
+        # 2. Если не нашли, пробуем прямое соответствие с CHAT_ID
+        if not target_chat:
+            actual_chat_id = CHAT_ID_1 if chat_id == CHAT_ID_1 else CHAT_ID_2
+            for chat in available_chats:
+                if chat["id"] == actual_chat_id:
+                    target_chat = chat
+                    logger.info(f"Найден чат по ID {actual_chat_id}")
                     break
-                except Exception as e:
-                    logger.error(f"Не удалось создать ссылку для чата с ID {variant}: {e}")
-                    continue
-            
-            if not invite_link:
-                # Если не удалось создать ссылку, используем статическую из переменных
-                invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
-                logger.warning(f"Используем статическую ссылку: {invite_link_url}")
-            else:
-                invite_link_url = invite_link.invite_link
-                
-            # Отправляем пользователю ссылку
-            await bot.send_message(
-                user_id,
-                f"Для входа в {chat_name} используйте эту одноразовую ссылку:\n\n"
-                f"{invite_link_url}\n\n"
-                f"Просто нажмите на ссылку и затем на кнопку 'Присоединиться'.\n\n"
-                f"⚠️ Ссылка действительна для одного входа и ограничена по времени."
-            )
-            logger.info(f"Отправлена одноразовая ссылка пользователю {user_id}")
-            
-            # Обновляем статус заявки
-            session = get_session()
+        
+        # 3. Если всё ещё не нашли, попробуем использовать непосредственно ID из .env
+        # (это обычно используют как последнее средство)
+        
+        invite_link_url = None
+        
+        if target_chat:
             try:
-                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                if join_request:
-                    join_request.status = "link_sent"
-                    session.commit()
-            except Exception as e:
-                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-            finally:
-                session.close()
-            
-            return True, "Пользователю отправлена одноразовая ссылка для входа в чат"
-        except Exception as link_error:
-            logger.error(f"Ошибка при создании ссылки: {link_error}")
-            # Если не удалось создать ссылку - сообщаем администратору
-            for admin_id in ADMIN_IDS:
-                await bot.send_message(
-                    admin_id,
-                    f"⚠️ Ошибка при создании ссылки для пользователя {user_id}:\n{str(link_error)}"
+                logger.info(f"Создаем одноразовую ссылку для чата {target_chat['title']} (ID: {target_chat['id']})")
+                invite_link = await admin_client.create_chat_invite_link(
+                    chat_id=target_chat['id'],
+                    member_limit=1,  # Ограничение на одного пользователя
+                    creates_join_request=False
                 )
-            return False, f"Не удалось создать ссылку: {str(link_error)}"
+                invite_link_url = invite_link.invite_link
+                logger.info(f"Успешно создана одноразовая ссылка: {invite_link_url}")
+            except Exception as e:
+                logger.error(f"Ошибка при создании ссылки для найденного чата: {e}")
+                invite_link_url = None
+        
+        # Если не удалось создать ссылку по найденному чату, пробуем прямое использование ID
+        if not invite_link_url:
+            try:
+                # Используем непосредственно ID из переменной окружения
+                direct_chat_id = CHAT_ID_1 if chat_id == CHAT_ID_1 else CHAT_ID_2
+                logger.info(f"Пробуем создать ссылку напрямую по ID: {direct_chat_id}")
+                
+                invite_link = await admin_client.create_chat_invite_link(
+                    chat_id=direct_chat_id,
+                    member_limit=1,
+                    creates_join_request=False
+                )
+                invite_link_url = invite_link.invite_link
+                logger.info(f"Успешно создана одноразовая ссылка через прямой ID: {invite_link_url}")
+            except Exception as e:
+                logger.error(f"Ошибка при создании ссылки по прямому ID: {e}")
+                invite_link_url = None
+        
+        # Если не удалось создать ссылку ни одним способом, используем запасную
+        if not invite_link_url:
+            invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
+            logger.warning(f"Используем запасную ссылку на чат: {invite_link_url}")
+            
+            # Проверяем, не пуста ли запасная ссылка
+            if not invite_link_url:
+                # Уведомляем администраторов о проблеме
+                for admin_id in ADMIN_IDS:
+                    await bot.send_message(
+                        admin_id,
+                        f"⚠️ КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать ссылку для чата {chat_id} "
+                        f"и запасная ссылка не настроена в файле .env!"
+                    )
+                return False, "Невозможно создать ссылку для этого чата. Администратор уведомлен."
+        
+        # Отправляем пользователю ссылку
+        await bot.send_message(
+            user_id,
+            f"Для входа в {chat_name} используйте эту ссылку:\n\n"
+            f"{invite_link_url}\n\n"
+            f"Просто нажмите на ссылку и затем на кнопку 'Присоединиться'.\n\n"
+            f"⚠️ Ссылка действительна для одного входа и ограничена по времени."
+        )
+        logger.info(f"Отправлена ссылка пользователю {user_id}")
+        
+        # Обновляем статус заявки
+        session = get_session()
+        try:
+            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+            if join_request:
+                join_request.status = "link_sent"
+                session.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+        finally:
+            session.close()
+        
+        return True, "Пользователю отправлена ссылка для входа в чат"
     except Exception as e:
         logger.error(f"Общая ошибка при работе с пользователем {user_id}: {e}")
+        # Уведомляем администраторов о проблеме
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"⚠️ Ошибка при добавлении пользователя {user_id}: {str(e)}"
+                )
+            except:
+                pass
         return False, f"Ошибка при отправке ссылки: {str(e)}"
 
 @bot.on_message(filters.command("start") & filters.private)

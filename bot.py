@@ -62,7 +62,7 @@ async def get_admin_client():
     """
     global active_admin_client
     
-    if active_admin_client and active_admin_client.is_connected:
+    if active_admin_client and hasattr(active_admin_client, 'is_connected') and active_admin_client.is_connected:
         return active_admin_client
     
     session = get_session()
@@ -77,29 +77,25 @@ async def get_admin_client():
         # Расшифровываем данные сессии
         session_data = decrypt_session(admin_account.session_data)
         
-        # Создаем временный файл сессии
-        session_file = f"admin_session_{admin_account.id}.json"
-        with open(session_file, "w") as f:
-            json.dump(session_data, f)
-        
-        # Инициализируем клиент
-        client = Client(
-            session_file,
-            api_id=API_ID,
-            api_hash=API_HASH
-        )
-        await client.start()
-        
-        # Обновляем статистику использования
-        admin_account.last_used = datetime.now()
-        admin_account.usage_count += 1
-        session.commit()
-        
-        # Удаляем временный файл сессии
-        os.remove(session_file)
-        
-        active_admin_client = client
-        return client
+        # Создаем и запускаем клиент напрямую из session_string
+        try:
+            client = Client(
+                ":memory:",
+                api_id=API_ID,
+                api_hash=API_HASH
+            )
+            await client.start()
+            
+            # Обновляем статистику использования
+            admin_account.last_used = datetime.now()
+            admin_account.usage_count += 1
+            session.commit()
+            
+            active_admin_client = client
+            return client
+        except Exception as e:
+            logger.error(f"Ошибка при запуске клиента администратора: {e}")
+            return None
     except Exception as e:
         logger.error(f"Ошибка при получении клиента администратора: {e}")
         return None
@@ -286,27 +282,31 @@ async def admin_command(client, message):
     Панель администратора
     """
     admin_text = "🔧 Панель администратора:\n\n"
-    admin_text += "Используйте следующие команды:\n"
-    admin_text += "/users - список пользователей\n"
-    admin_text += "/requests - список заявок на вступление\n"
-    admin_text += "/block [user_id] - заблокировать пользователя\n"
-    admin_text += "/unblock [user_id] - разблокировать пользователя\n"
-    admin_text += "/add_admin [phone] - добавить админ-аккаунт\n"
-    admin_text += "/remove_admin [phone] - удалить админ-аккаунт\n"
+    admin_text += "Выберите действие:"
     
-    await message.reply(admin_text)
+    # Создаем инлайн-клавиатуру для админа
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
+        [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+        [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
+        [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
+        [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
+        [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
+    ])
+    
+    await message.reply(admin_text, reply_markup=keyboard)
 
-@bot.on_message(filters.command("users") & filters.private & filters.user(ADMIN_IDS))
-async def users_command(client, message):
+@bot.on_callback_query(filters.regex(r"^admin_users$"))
+async def admin_users_callback(client, callback_query):
     """
-    Список пользователей
+    Список пользователей через клавиатуру
     """
     session = get_session()
     try:
         users = session.query(User).order_by(User.registration_date.desc()).limit(20).all()
         
         if not users:
-            await message.reply("Список пользователей пуст.")
+            await callback_query.edit_message_text("Список пользователей пуст.")
             return
         
         users_text = "👥 Список последних пользователей:\n\n"
@@ -322,13 +322,171 @@ async def users_command(client, message):
             users_text += f"Чат: {chat}\n"
             users_text += f"Регистрация: {user.registration_date.strftime('%d.%m.%Y %H:%M')}\n\n"
         
-        await message.reply(users_text)
+        # Добавляем кнопку назад
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+        
+        await callback_query.edit_message_text(users_text, reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Ошибка при получении списка пользователей: {e}")
-        await message.reply("Произошла ошибка при получении списка пользователей.")
+        await callback_query.edit_message_text("Произошла ошибка при получении списка пользователей.")
     finally:
         session.close()
 
+@bot.on_callback_query(filters.regex(r"^admin_requests$"))
+async def admin_requests_callback(client, callback_query):
+    """
+    Список заявок через клавиатуру
+    """
+    session = get_session()
+    try:
+        requests = session.query(JoinRequest).order_by(JoinRequest.created_at.desc()).limit(20).all()
+        
+        if not requests:
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+            ])
+            await callback_query.edit_message_text("Список заявок пуст.", reply_markup=keyboard)
+            return
+        
+        requests_text = "📝 Список последних заявок:\n\n"
+        
+        for req in requests:
+            user = session.query(User).filter_by(user_id=req.user_id).first()
+            username = f"@{user.username}" if user and user.username else "нет"
+            name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
+            
+            chat_name = "Чат #1" if req.chat_id == CHAT_ID_1 else "Чат #2"
+            status_emoji = "✅" if req.status == "approved" else "❌" if req.status == "rejected" else "⏳"
+            
+            requests_text += f"ID: {req.user_id}\n"
+            requests_text += f"Имя: {name}\n"
+            requests_text += f"Username: {username}\n"
+            requests_text += f"Чат: {chat_name}\n"
+            requests_text += f"Статус: {status_emoji} {req.status}\n"
+            requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        
+        # Добавляем кнопку назад
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+        
+        await callback_query.edit_message_text(requests_text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка заявок: {e}")
+        await callback_query.edit_message_text("Произошла ошибка при получении списка заявок.")
+    finally:
+        session.close()
+
+@bot.on_callback_query(filters.regex(r"^admin_block$"))
+async def admin_block_callback(client, callback_query):
+    """
+    Запрос ID для блокировки пользователя
+    """
+    await callback_query.edit_message_text(
+        "🔒 Введите ID пользователя, которого хотите заблокировать.\n\n"
+        "Отправьте сообщение в формате: /block ID",
+        reply_markup=types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+    )
+
+@bot.on_callback_query(filters.regex(r"^admin_unblock$"))
+async def admin_unblock_callback(client, callback_query):
+    """
+    Запрос ID для разблокировки пользователя
+    """
+    await callback_query.edit_message_text(
+        "🔓 Введите ID пользователя, которого хотите разблокировать.\n\n"
+        "Отправьте сообщение в формате: /unblock ID",
+        reply_markup=types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+    )
+
+@bot.on_callback_query(filters.regex(r"^admin_add_account$"))
+async def admin_add_account_callback(client, callback_query):
+    """
+    Информация о добавлении аккаунта
+    """
+    await callback_query.edit_message_text(
+        "⚙️ Для добавления аккаунта администратора необходимо создать JSON-сессию Pyrogram.\n\n"
+        "Запустите скрипт session_creator.py для авторизации нового аккаунта.",
+        reply_markup=types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+    )
+
+@bot.on_callback_query(filters.regex(r"^admin_remove_account$"))
+async def admin_remove_account_callback(client, callback_query):
+    """
+    Запрос номера для удаления аккаунта
+    """
+    await callback_query.edit_message_text(
+        "➖ Введите номер телефона аккаунта, который хотите удалить.\n\n"
+        "Отправьте сообщение в формате: /remove_admin НОМЕР",
+        reply_markup=types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+    )
+
+@bot.on_callback_query(filters.regex(r"^back_to_admin$"))
+async def back_to_admin_callback(client, callback_query):
+    """
+    Возврат в панель администратора
+    """
+    admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
+    
+    keyboard = types.InlineKeyboardMarkup([
+        [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
+        [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+        [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
+        [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
+        [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
+        [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
+    ])
+    
+    await callback_query.edit_message_text(admin_text, reply_markup=keyboard)
+
+async def startup():
+    """
+    Функция запуска
+    """
+    # Инициализация базы данных
+    init_db()
+    
+    # Запуск бота
+    await bot.start()
+    logger.info("Бот запущен")
+    
+    # Бесконечный цикл для поддержания работы бота
+    while True:
+        await asyncio.sleep(3600)  # Ждем 1 час
+
+async def shutdown():
+    """
+    Функция остановки
+    """
+    # Закрываем клиент администратора, если он активен
+    global active_admin_client
+    if active_admin_client and active_admin_client.is_connected:
+        await active_admin_client.stop()
+    
+    # Останавливаем бот
+    await bot.stop()
+    logger.info("Бот остановлен")
+
+if __name__ == "__main__":
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(startup())
+    except KeyboardInterrupt:
+        loop.run_until_complete(shutdown())
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}")
+
+# Оставляем обработчики команд для блокировки и разблокировки пользователей
 @bot.on_message(filters.command("block") & filters.private & filters.user(ADMIN_IDS))
 async def block_command(client, message):
     """
@@ -389,17 +547,6 @@ async def unblock_command(client, message):
     finally:
         session.close()
 
-@bot.on_message(filters.command("add_admin") & filters.private & filters.user(ADMIN_IDS))
-async def add_admin_command(client, message):
-    """
-    Добавление аккаунта администратора
-    """
-    # В упрощенной версии просто сообщаем, что функция требует настройки сессий
-    await message.reply(
-        "⚙️ Для добавления аккаунта администратора необходимо создать JSON-сессию Pyrogram.\n\n"
-        "Для этого запустите отдельный скрипт для авторизации аккаунта и затем добавьте его в базу данных."
-    )
-
 @bot.on_message(filters.command("remove_admin") & filters.private & filters.user(ADMIN_IDS))
 async def remove_admin_command(client, message):
     """
@@ -426,41 +573,4 @@ async def remove_admin_command(client, message):
         logger.error(f"Ошибка при удалении аккаунта администратора: {e}")
         await message.reply("Произошла ошибка при удалении аккаунта администратора.")
     finally:
-        session.close()
-
-async def startup():
-    """
-    Функция запуска
-    """
-    # Инициализация базы данных
-    init_db()
-    
-    # Запуск бота
-    await bot.start()
-    logger.info("Бот запущен")
-    
-    # Бесконечный цикл для поддержания работы бота
-    while True:
-        await asyncio.sleep(3600)  # Ждем 1 час
-
-async def shutdown():
-    """
-    Функция остановки
-    """
-    # Закрываем клиент администратора, если он активен
-    global active_admin_client
-    if active_admin_client and active_admin_client.is_connected:
-        await active_admin_client.stop()
-    
-    # Останавливаем бот
-    await bot.stop()
-    logger.info("Бот остановлен")
-
-if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(startup())
-    except KeyboardInterrupt:
-        loop.run_until_complete(shutdown())
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}") 
+        session.close() 

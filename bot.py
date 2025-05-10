@@ -1494,7 +1494,7 @@ async def back_to_settings_callback(client, callback_query):
         await callback_query.answer("Произошла ошибка при возврате в меню настроек")
 
 # Обработчик для получения нового текста настроек
-@bot.on_message(filters.private & filters.user(ADMIN_IDS) & ~filters.command)
+@bot.on_message(filters.private & filters.user(ADMIN_IDS) & filters.text)
 async def handle_new_ui_text(client, message):
     """
     Обработка нового текста для пользовательского интерфейса

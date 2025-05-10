@@ -76,7 +76,12 @@ def get_pyrogram_chat_id(chat_id):
 CHAT_ID_1 = convert_chat_id(CHAT_ID_1_STR)
 CHAT_ID_2 = convert_chat_id(CHAT_ID_2_STR)
 
+# Ссылки на чаты (добавьте в файл .env)
+CHAT_LINK_1 = os.getenv("CHAT_LINK_1", "https://t.me/+vUfNTKnmWr4wMDVi")  # Создайте пригласительную ссылку в Telegram
+CHAT_LINK_2 = os.getenv("CHAT_LINK_2", "https://t.me/+vUfNTKnmWr4wMDVi")  # И добавьте в .env
+
 logger.info(f"Используются ID чатов: {CHAT_ID_1}, {CHAT_ID_2}")
+logger.info(f"Ссылки на чаты: {CHAT_LINK_1}, {CHAT_LINK_2}")
 
 # Инициализация бота
 bot = Client("telegram_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -159,102 +164,46 @@ async def add_user_to_chat(user_id, chat_id):
     """
     Добавление пользователя в чат
     """
-    admin_client = await get_admin_client()
-    if not admin_client:
-        return False, "Нет доступного администратора для добавления в чат"
-    
     try:
-        # Получаем правильный ID чата для Pyrogram
-        chat_id_str = str(chat_id)
-        
-        # Исправляем ситуацию с двойным префиксом -100
-        if "-100-100" in chat_id_str:
-            chat_id_str = chat_id_str.replace("-100-100", "-100")
-        
-        # Создаем несколько вариантов ID чата для надежности
-        chat_variants = []
-        
-        # Оригинальный (как есть)
-        chat_variants.append(chat_id_str)
-        
-        # Очищенный от всех -100 и затем добавлен один -100
-        clean_id = chat_id_str
-        while "-100" in clean_id:
-            clean_id = clean_id.replace("-100", "", 1)
-        chat_variants.append(f"-100{clean_id}")
-        
-        # Без префикса -100
-        if chat_id_str.startswith("-100"):
-            chat_variants.append(chat_id_str[4:])
-        
-        # Просто с префиксом -100
-        if not chat_id_str.startswith("-100"):
-            chat_variants.append(f"-100{chat_id_str}")
-        
-        # Удаляем дубликаты и добавляем явное значение из .env
-        chat_variants = list(set(chat_variants))
-        chat_variants.append("-1002698797779")  # Явное значение из .env
-        chat_variants.append("2698797779")  # ID без префикса
-        
-        logger.info(f"Пробуем следующие варианты ID чата: {chat_variants}")
-        
-        success = False
-        error_message = ""
-        
-        # Пробуем все варианты ID
-        for variant in chat_variants:
-            try:
-                logger.info(f"Пробуем добавить пользователя {user_id} в чат с ID {variant}")
-                
-                # Пробуем несколько способов добавления пользователя
-                try:
-                    # Способ 1: Использование метода add_chat_members
-                    await admin_client.add_chat_members(variant, user_id)
-                    logger.info(f"Метод add_chat_members успешен для ID {variant}")
-                    success = True
-                    break
-                except Exception as e1:
-                    logger.error(f"add_chat_members не сработал для ID {variant}: {e1}")
-                    # Способ 2: Прямое добавление через invite link (только для групп)
-                    try:
-                        # Создаем временную ссылку-приглашение
-                        export_link = await admin_client.export_chat_invite_link(variant)
-                        logger.info(f"Создана временная ссылка для чата с ID {variant}: {export_link}")
-                        
-                        # Отправляем пользователю ссылку и сообщение
-                        await bot.send_message(
-                            user_id,
-                            f"Для входа в чат используйте эту ссылку: {export_link}\n\n"
-                            f"Ссылка действительна в течение нескольких минут."
-                        )
-                        logger.info(f"Отправлена ссылка пользователю {user_id}")
-                        success = True
-                        break
-                    except Exception as e2:
-                        logger.error(f"Не удалось отправить ссылку-приглашение: {e2}")
-                        continue
-                
-            except UserAlreadyParticipant:
-                logger.info(f"Пользователь уже в чате с ID {variant}")
-                return False, "Пользователь уже в чате"
-            except UserPrivacyRestricted:
-                logger.info(f"Пользователь запретил добавление с ID {variant}")
-                error_message = "Пользователь запретил добавление в группы через настройки приватности"
-            except PeerFlood:
-                logger.info(f"Достигнут лимит добавления для ID {variant}")
-                error_message = "Достигнут лимит добавления пользователей, попробуйте позже"
-            except Exception as e:
-                logger.error(f"Не удалось добавить с ID {variant}: {e}")
-                error_message = f"Ошибка при добавлении: {str(e)}"
-                continue
-                
-        if success:
-            return True, "Пользователь успешно добавлен в чат"
+        # Отправляем ссылку на публичный чат (обязательно создайте публичную ссылку в настройках чата)
+        # Замените ссылку на актуальную публичную ссылку вашего чата
+        if chat_id == CHAT_ID_1:
+            # Ссылка на первый чат
+            chat_link = CHAT_LINK_1
+            chat_name = "основной чат"
         else:
-            return False, error_message or "Не удалось добавить пользователя ни с одним из вариантов ID чата"
+            # Ссылка на второй чат
+            chat_link = CHAT_LINK_2
+            chat_name = "второй чат"
+        
+        # Отправляем пользователю ссылку и сообщение
+        await bot.send_message(
+            user_id,
+            f"Для входа в {chat_name} используйте эту ссылку:\n\n"
+            f"{chat_link}\n\n"
+            f"Просто нажмите на ссылку и затем на кнопку 'Присоединиться'.\n\n"
+            f"⚠️ Если возникнут проблемы со ссылкой, обратитесь в поддержку."
+        )
+        logger.info(f"Отправлена ссылка-приглашение пользователю {user_id}")
+        
+        # Обновляем статус заявки в базе данных
+        session = get_session()
+        try:
+            # Находим заявку по ID пользователя и чата
+            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+            if join_request:
+                join_request.status = "link_sent"
+                session.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+        finally:
+            session.close()
+        
+        # Сообщаем об успехе, хотя реальное добавление произойдет когда пользователь нажмет на ссылку
+        return True, "Пользователю отправлена ссылка для входа в чат"
     except Exception as e:
-        logger.error(f"Общая ошибка при добавлении пользователя {user_id} в чат: {e}")
-        return False, f"Общая ошибка при добавлении: {str(e)}"
+        logger.error(f"Ошибка при отправке ссылки пользователю {user_id}: {e}")
+        return False, f"Ошибка при отправке ссылки: {str(e)}"
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):

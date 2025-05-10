@@ -44,6 +44,22 @@ def convert_chat_id(chat_id_str):
         return int(chat_id_str[4:])
     return int(chat_id_str)
 
+# Функция для получения правильного ID чата для Pyrogram
+def get_pyrogram_chat_id(chat_id):
+    """
+    Преобразует ID чата в формат, подходящий для Pyrogram
+    """
+    # Если это уже строка с префиксом -100, просто возвращаем
+    if isinstance(chat_id, str) and chat_id.startswith("-100"):
+        return chat_id
+    
+    # Если это число или строка без префикса, добавляем префикс
+    if isinstance(chat_id, int) or (isinstance(chat_id, str) and chat_id.isdigit()):
+        return f"-100{chat_id}"
+    
+    # Если это другой формат, возвращаем как есть
+    return chat_id
+
 CHAT_ID_1 = convert_chat_id(CHAT_ID_1_STR)
 CHAT_ID_2 = convert_chat_id(CHAT_ID_2_STR)
 
@@ -135,19 +151,20 @@ async def add_user_to_chat(user_id, chat_id):
         return False, "Нет доступного администратора для добавления в чат"
     
     try:
-        # Используем ID чата напрямую без преобразований
-        logger.info(f"Попытка добавления пользователя {user_id} в чат с ID {chat_id}")
+        # Для Telegram суперчатов всегда должен быть префикс -100
+        pyrogram_chat_id = get_pyrogram_chat_id(chat_id)
+        logger.info(f"Попытка добавления пользователя {user_id} в чат с ID {pyrogram_chat_id}")
         
         # Получаем информацию о чате, чтобы убедиться, что клиент имеет к нему доступ
         try:
-            chat_info = await admin_client.get_chat(chat_id)
+            chat_info = await admin_client.get_chat(pyrogram_chat_id)
             logger.info(f"Информация о чате получена: {chat_info.title}, тип: {chat_info.type}")
         except Exception as e:
-            logger.error(f"Не удалось получить информацию о чате {chat_id}: {e}")
+            logger.error(f"Не удалось получить информацию о чате {pyrogram_chat_id}: {e}")
             return False, f"Ошибка доступа к чату: {str(e)}"
         
-        # Добавляем пользователя напрямую, используя ID, полученный из .env
-        await admin_client.add_chat_members(chat_id, user_id)
+        # Добавляем пользователя 
+        await admin_client.add_chat_members(pyrogram_chat_id, user_id)
         return True, "Пользователь успешно добавлен в чат"
     except UserAlreadyParticipant:
         return False, "Пользователь уже в чате"
@@ -156,7 +173,7 @@ async def add_user_to_chat(user_id, chat_id):
     except PeerFlood:
         return False, "Достигнут лимит добавления пользователей, попробуйте позже"
     except Exception as e:
-        logger.error(f"Ошибка при добавлении пользователя {user_id} в чат {chat_id}: {e}")
+        logger.error(f"Ошибка при добавлении пользователя {user_id} в чат {pyrogram_chat_id}: {e}")
         return False, f"Ошибка при добавлении: {str(e)}"
 
 @bot.on_message(filters.command("start") & filters.private)

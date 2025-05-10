@@ -413,26 +413,26 @@ async def add_user_to_chat(user_id, chat_id):
                     logger.info(f"Пользователь {user_id} успешно добавлен через raw API")
                     
                     # Отправляем сообщение об успешном добавлении
-                await bot.send_message(
-                    user_id,
-                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                    f"Можете открыть чат в своем приложении Telegram."
-                )
-                
-                # Обновляем статус заявки
-                session = get_session()
-                try:
-                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                    if join_request:
-                        join_request.status = "approved"
-                        join_request.approved_by = 0
-                        join_request.approved_at = datetime.now()
-                        session.commit()
-                except Exception as e:
-                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                finally:
-                    session.close()
-                
+                    await bot.send_message(
+                        user_id,
+                        f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                        f"Можете открыть чат в своем приложении Telegram."
+                    )
+                    
+                    # Обновляем статус заявки
+                    session = get_session()
+                    try:
+                        join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                        if join_request:
+                            join_request.status = "approved"
+                            join_request.approved_by = 0
+                            join_request.approved_at = datetime.now()
+                            session.commit()
+                    except Exception as e:
+                        logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                    finally:
+                        session.close()
+                    
                     return True, "Пользователь успешно добавлен в чат через raw API"
                     
                 except Exception as raw_error:
@@ -475,8 +475,8 @@ async def add_user_to_chat(user_id, chat_id):
                         logger.info(f"Пользователь {user_id} успешно добавлен после импорта контакта")
                         
                         # Отправляем сообщение об успешном добавлении
-            await bot.send_message(
-                user_id,
+                        await bot.send_message(
+                            user_id,
                             f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
                             f"Можете открыть чат в своем приложении Telegram."
                         )
@@ -589,56 +589,56 @@ async def add_user_to_chat(user_id, chat_id):
                                 user_id,
                                 f"🔒 К сожалению, мы не смогли добавить вас в чат. Возможно, дело в настройках Telegram.\n\n"
                                 f"🔍 Чтобы решить эту проблему, попробуйте изменить настройки конфиденциальности:\n\n"
-                f"👉 Откройте настройки Telegram\n"
-                f"👉 Перейдите в раздел 'Конфиденциальность'\n" 
-                f"👉 Выберите 'Группы и каналы'\n"
-                f"👉 Для опции 'Кто может добавить меня в группы' выберите 'Все'\n\n"
+                                f"👉 Откройте настройки Telegram\n"
+                                f"👉 Перейдите в раздел 'Конфиденциальность'\n" 
+                                f"👉 Выберите 'Группы и каналы'\n"
+                                f"👉 Для опции 'Кто может добавить меня в группы' выберите 'Все'\n\n"
                                 f"📱 Мы приложили инструкции с картинками:"
-            )
+                            )
             
-            # Отправляем инструкции с картинками
-            try:
-                # Отправляем изображения с инструкциями, если они доступны
-                await bot.send_photo(
-                    user_id,
-                    "screen/1.jpg",
-                    caption="1. Откройте настройки и выберите 'Конфиденциальность'"
-                )
+                            # Отправляем инструкции с картинками
+                            try:
+                                # Отправляем изображения с инструкциями, если они доступны
+                                await bot.send_photo(
+                                    user_id,
+                                    "screen/1.jpg",
+                                    caption="1. Откройте настройки и выберите 'Конфиденциальность'"
+                                )
+                                
+                                await bot.send_photo(
+                                    user_id,
+                                    "screen/2.jpg",
+                                    caption="2. Выберите 'Группы и каналы'"
+                                )
+                                
+                                await bot.send_photo(
+                                    user_id,
+                                    "screen/3.jpg",
+                                    caption="3. Установите 'Кто может добавить меня в группы' на 'Все'"
+                                )
+                                
+                                await bot.send_message(
+                                    user_id,
+                                    "🎉 После изменения настроек вернитесь сюда и повторите попытку! Мы сможем добавить вас автоматически."
+                                )
+                                
+                            except Exception as photo_err:
+                                logger.error(f"Ошибка при отправке инструкций с изображениями: {photo_err}")
+                            
+                            # Обновляем статус заявки
+                            session = get_session()
+                            try:
+                                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                if join_request:
+                                    join_request.status = "link_sent"
+                                    session.commit()
+                            except Exception as db_err:
+                                logger.error(f"Ошибка при обновлении статуса заявки: {db_err}")
+                            finally:
+                                session.close()
+                            
+                            return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
                 
-                await bot.send_photo(
-                    user_id,
-                    "screen/2.jpg",
-                    caption="2. Выберите 'Группы и каналы'"
-                )
-                
-                await bot.send_photo(
-                    user_id,
-                    "screen/3.jpg",
-                    caption="3. Установите 'Кто может добавить меня в группы' на 'Все'"
-                )
-                
-                await bot.send_message(
-                    user_id,
-                    "🎉 После изменения настроек вернитесь сюда и повторите попытку! Мы сможем добавить вас автоматически."
-                )
-                
-            except Exception as photo_err:
-                logger.error(f"Ошибка при отправке инструкций с изображениями: {photo_err}")
-            
-            # Обновляем статус заявки
-            session = get_session()
-            try:
-                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                if join_request:
-                    join_request.status = "link_sent"
-                    session.commit()
-            except Exception as db_err:
-                logger.error(f"Ошибка при обновлении статуса заявки: {db_err}")
-            finally:
-                session.close()
-            
-            return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
-            
                 raise standard_error
                 
         except UserAlreadyParticipant:

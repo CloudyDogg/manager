@@ -6,7 +6,7 @@ import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
 from pyrogram import Client, filters, types, errors, raw
-from pyrogram import functions
+from pyrogram.raw import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood
 from cryptography.fernet import Fernet
 import json
@@ -215,28 +215,24 @@ async def add_user_to_chat(user_id, chat_id):
                     break
                 except Exception as e1:
                     logger.error(f"add_chat_members не сработал для ID {variant}: {e1}")
-                    # Способ 2: Использование low-level API для invite_to_channel
+                    # Способ 2: Прямое добавление через invite link (только для групп)
                     try:
-                        # Получаем объект чата
-                        chat = await admin_client.get_chat(variant)
-                        logger.info(f"Получен объект чата: {chat.title}, тип: {chat.type}")
+                        # Создаем временную ссылку-приглашение
+                        export_link = await admin_client.export_chat_invite_link(variant)
+                        logger.info(f"Создана временная ссылка для чата с ID {variant}: {export_link}")
                         
-                        # Получаем объект пользователя
-                        user = await admin_client.get_users(user_id)
-                        
-                        # Используем метод join_chat для добавления пользователя
-                        result = await admin_client.invoke(
-                            functions.channels.InviteToChannel(
-                                channel=await admin_client.resolve_peer(variant),
-                                users=[await admin_client.resolve_peer(user_id)]
-                            )
+                        # Отправляем пользователю ссылку и сообщение
+                        await bot.send_message(
+                            user_id,
+                            f"Для входа в чат используйте эту ссылку: {export_link}\n\n"
+                            f"Ссылка действительна в течение нескольких минут."
                         )
-                        logger.info(f"Метод InviteToChannel успешен для ID {variant}")
+                        logger.info(f"Отправлена ссылка пользователю {user_id}")
                         success = True
                         break
                     except Exception as e2:
-                        logger.error(f"InviteToChannel не сработал для ID {variant}: {e2}")
-                        raise e2
+                        logger.error(f"Не удалось отправить ссылку-приглашение: {e2}")
+                        continue
                 
             except UserAlreadyParticipant:
                 logger.info(f"Пользователь уже в чате с ID {variant}")

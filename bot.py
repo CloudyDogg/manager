@@ -679,10 +679,10 @@ async def start_command(client, message):
             session.commit()
         
         # Получаем настраиваемые тексты из базы данных (с значениями по умолчанию)
-        button_join_text = get_setting("button_join_text", "🚪 Хочу в чат")
-        button_info_text = get_setting("button_info_text", "ℹ️ Узнать подробности")
-        button_support_text = get_setting("button_support_text", "📞 Поддержка")
-        welcome_message = get_setting("welcome_message", f"👋 Привет, {message.from_user.first_name}!\n\nЯ бот для добавления в закрытые чаты. Выберите действие:")
+        button_join_text = get_setting("button_join_text", "🚀 Вступить в чат!")
+        button_info_text = get_setting("button_info_text", "🔍 Что тут у вас?")
+        button_support_text = get_setting("button_support_text", "🆘 Нужна помощь")
+        welcome_message = get_setting("welcome_message", f"👋 Хэй, {message.from_user.first_name}! Рады видеть тебя! 😎\n\nЯ твой личный помощник для вступления в наши крутые чаты. Что будем делать?")
         
         # Используем полученный текст для приветствия
         welcome_text = welcome_message
@@ -697,7 +697,7 @@ async def start_command(client, message):
         await message.reply(welcome_text, reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Ошибка в команде start: {e}")
-        await message.reply("Произошла ошибка. Пожалуйста, попробуйте позже.")
+        await message.reply("Ой! Что-то пошло не так 😅 Попробуй еще раз чуть позже, ладно?")
     finally:
         session.close()
 
@@ -707,13 +707,13 @@ async def show_chats_callback(client, callback_query):
     Показывает меню выбора чатов
     """
     # Получаем настраиваемый текст для заголовка
-    chat_select_text = get_setting("chat_select_text", "Выберите чат, в который хотите вступить:")
+    chat_select_text = get_setting("chat_select_text", "🤔 В какой классный чат хочешь попасть? Выбирай!")
     
     # Создаем клавиатуру для выбора чатов
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton("Чат #1", callback_data="select_chat_1")],
-        [types.InlineKeyboardButton("Чат #2", callback_data="select_chat_2")],
-        [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
+        [types.InlineKeyboardButton("Чат #1 🔥", callback_data="select_chat_1")],
+        [types.InlineKeyboardButton("Чат #2 ✨", callback_data="select_chat_2")],
+        [types.InlineKeyboardButton("↩️ Назад в меню", callback_data="back_to_menu")]
     ])
     
     await callback_query.edit_message_text(chat_select_text, reply_markup=keyboard)
@@ -725,16 +725,16 @@ async def show_info_callback(client, callback_query):
     """
     # Получаем настраиваемый текст информации
     info_text = get_setting("info_text", 
-        "ℹ️ *Информация о чатах*\n\n"
-        "Наши чаты предназначены для общения на разные темы:\n\n"
-        "*Чат #1*: Общение на общие темы, новости, обсуждения.\n"
-        "*Чат #2*: Специализированное обсуждение для профессионалов.\n\n"
-        "Для вступления в чат выберите 'Хочу в чат' в главном меню."
+        "ℹ️ *Наши супер-чаты* 🌟\n\n"
+        "У нас есть два классных чата для общения:\n\n"
+        "*Чат #1*: 🔥 Здесь кипит общение на разные темы! Новости, обсуждения и просто душевные беседы.\n\n"
+        "*Чат #2*: ✨ Это особый чат для профессионалов и тех, кто хочет ими стать!\n\n"
+        "Готов присоединиться? Жми кнопку ниже! 👇"
     )
     
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton("🚪 Хочу в чат", callback_data="show_chats")],
-        [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
+        [types.InlineKeyboardButton("🚀 Хочу в чат!", callback_data="show_chats")],
+        [types.InlineKeyboardButton("↩️ Назад в меню", callback_data="back_to_menu")]
     ])
     
     await callback_query.edit_message_text(info_text, reply_markup=keyboard, parse_mode=enums.ParseMode.MARKDOWN)
@@ -749,7 +749,7 @@ async def select_chat_callback(client, callback_query):
     chat_id = CHAT_ID_1 if chat_num == "1" else CHAT_ID_2
     
     if chat_id == 0:
-        await callback_query.answer("Этот чат временно недоступен")
+        await callback_query.answer("Ой! Этот чат сейчас отдыхает 😴 Выбери другой!")
         return
     
     session = get_session()
@@ -757,7 +757,7 @@ async def select_chat_callback(client, callback_query):
         # Проверяем, не в черном ли списке пользователь
         user = session.query(User).filter_by(user_id=user_id).first()
         if user and user.is_blacklisted:
-            await callback_query.answer("Вы не можете быть добавлены в чат")
+            await callback_query.answer("Упс! К сожалению, ты не можешь быть добавлен в чат 😞")
             return
         
         # Проверяем ограничение на количество заявок
@@ -769,13 +769,13 @@ async def select_chat_callback(client, callback_query):
             
             # Информируем пользователя о блокировке
             keyboard = types.InlineKeyboardMarkup([
-                [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
+                [types.InlineKeyboardButton("↩️ Назад в меню", callback_data="back_to_menu")]
             ])
             
             await callback_query.edit_message_text(
-                "⚠️ Вы превысили лимит заявок (5 заявок в минуту).\n\n"
-                "⛔ Вы временно заблокированы. Пожалуйста, обратитесь к администратору.\n\n"
-                "⏳ Повторите попытку позже или свяжитесь с поддержкой для разблокировки.",
+                "⚠️ Вау, полегче! Ты отправил слишком много заявок (5 за минуту).\n\n"
+                "⛔ Мы временно заблокировали эту функцию для тебя. Сделай глубокий вдох, выпей чашечку чая ☕\n\n"
+                "⏳ Попробуй снова чуть позже или свяжись с нашей поддержкой, если это какая-то ошибка!",
                 reply_markup=keyboard
             )
             
@@ -821,8 +821,8 @@ async def select_chat_callback(client, callback_query):
         
         # Сообщаем пользователю, что его заявка обрабатывается
         await callback_query.edit_message_text(
-            "⏳ Обрабатываем вашу заявку...\n\n"
-            "Пожалуйста, подождите несколько секунд."
+            "⏳ Обрабатываем твою заявку...\n\n"
+            "Секундочку! Готовим для тебя приглашение в чат... 🧙‍♂️✨"
         )
         
         # Добавляем пользователя
@@ -864,9 +864,9 @@ async def select_chat_callback(client, callback_query):
                 
                 # Получаем настраиваемый текст сообщения о настройках приватности
                 privacy_message = get_setting("privacy_message",
-                    "🔒 Из-за ваших настроек приватности мы не смогли добавить вас автоматически.\n\n"
-                    "✉️ Мы отправили вам инструкции по изменению настроек приватности в личном сообщении.\n\n"
-                    "👆 Проверьте сообщения от бота и следуйте инструкциям."
+                    "🔒 Ой-ой! Твои настройки приватности не дают нам добавить тебя автоматически. 😢\n\n"
+                    "✉️ Но не волнуйся! Мы отправили тебе подробные инструкции по изменению настроек в личном сообщении.\n\n"
+                    "👆 Проверь сообщения и просто следуй инструкциям! Через минуту ты будешь в чате! 🚀"
                 )
                 
                 await callback_query.edit_message_text(
@@ -908,9 +908,9 @@ async def select_chat_callback(client, callback_query):
                 
                 # Получаем настраиваемый текст сообщения о ручной проверке
                 manual_check_message = get_setting("manual_check_message",
-                    "⏳ Ваша заявка принята и будет рассмотрена администратором.\n\n"
+                    "⏳ Твоя заявка принята! Сейчас она в руках наших админов! 👨‍💻\n\n"
                     "📋 В данный момент включен режим ручного добавления пользователей.\n"
-                    "⌛ Вы будете добавлены после одобрения заявки администратором."
+                    "⌛ Мы добавим тебя в чат, как только один из наших админов одобрит заявку. Обычно это происходит быстро! 🏎️"
                 )
                 
                 await callback_query.edit_message_text(
@@ -997,7 +997,8 @@ async def select_chat_callback(client, callback_query):
                 
                 # Получаем настраиваемый текст сообщения об ошибке
                 error_message_template = get_setting("error_message_template", 
-                    "❌ Не удалось добавить вас в чат: {error}\n\nПопробуйте позже или обратитесь в поддержку."
+                    "❌ Ой! Что-то пошло не так: {error}\n\n"
+                    "Попробуй еще раз чуть позже или напиши нам в поддержку - мы обязательно поможем! 💪"
                 )
                 
                 # Подставляем конкретную ошибку в шаблон
@@ -1037,10 +1038,10 @@ async def back_to_menu_callback(client, callback_query):
     Возврат в главное меню
     """
     # Получаем настраиваемые тексты из базы данных (с значениями по умолчанию)
-    button_join_text = get_setting("button_join_text", "🚪 Хочу в чат")
-    button_info_text = get_setting("button_info_text", "ℹ️ Узнать подробности")
-    button_support_text = get_setting("button_support_text", "📞 Поддержка")
-    welcome_message = get_setting("welcome_message", "👋 Выберите действие:")
+    button_join_text = get_setting("button_join_text", "🚀 Вступить в чат!")
+    button_info_text = get_setting("button_info_text", "🔍 Что тут у вас?")
+    button_support_text = get_setting("button_support_text", "🆘 Нужна помощь")
+    welcome_message = get_setting("welcome_message", "👋 Хэй! Что будем делать дальше? 😎")
     
     # Создаем клавиатуру с новыми кнопками
     keyboard = types.InlineKeyboardMarkup([
@@ -1058,11 +1059,13 @@ async def support_callback(client, callback_query):
     """
     # Получаем настраиваемый текст поддержки
     support_text = get_setting("support_text", 
-        "📞 Для обращения в поддержку напишите личное сообщение администратору."
+        "🆘 *Нужна помощь?*\n\n"
+        "Не переживай! Наша команда поддержки всегда готова помочь тебе! 💪\n\n"
+        "Просто напиши личное сообщение нашему администратору, и мы постараемся ответить как можно быстрее! 🏎️"
     )
     
     keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
+        [types.InlineKeyboardButton("↩️ Назад в меню", callback_data="back_to_menu")]
     ])
     
     await callback_query.edit_message_text(support_text, reply_markup=keyboard, parse_mode=enums.ParseMode.MARKDOWN)
@@ -1073,12 +1076,12 @@ async def admin_command(client, message):
     """
     Панель администратора
     """
-    admin_text = "🔧 Панель администратора:\n\n"
-    admin_text += "Выберите действие:"
+    admin_text = "🛠️ Панель администратора 🔧\n\n"
+    admin_text += "Привет, супер-админ! 😎 Что будем делать сегодня?"
     
     # Получаем текущий статус автодобавления
     auto_add_enabled = get_setting("auto_add_enabled", "true").lower() == "true"
-    auto_add_button_text = "🔴 Отключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
+    auto_add_button_text = "🔴 Выключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
     auto_add_callback = "toggle_auto_add_off" if auto_add_enabled else "toggle_auto_add_on"
     
     # Создаем инлайн-клавиатуру для админа
@@ -1202,78 +1205,73 @@ async def admin_users_callback(client, callback_query):
 @bot.on_callback_query(filters.regex(r"^admin_active_requests$"))
 async def admin_active_requests_callback(client, callback_query):
     """
-    Список активных заявок без лишних кнопок
+    Просмотр активных заявок (ожидающих проверки)
     """
-    session = get_session()
+    if callback_query.from_user.id not in ADMIN_IDS:
+        await callback_query.answer("У тебя не хватает прав для этого 😅")
+        return
+    
     try:
-        # Получаем активные заявки (pending и manual_check)
-        requests = session.query(JoinRequest).filter(
-            JoinRequest.status.in_(["pending", "manual_check"])
-        ).order_by(JoinRequest.created_at.desc()).limit(20).all()
-        
-        if not requests:
+        session = get_session()
+        try:
+            # Получаем все активные заявки
+            active_requests = session.query(JoinRequest).filter_by(status="pending").all()
+            
+            if not active_requests:
+                keyboard = types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton("↩️ Назад в меню админа", callback_data="back_to_admin")]
+                ])
+                
+                await callback_query.edit_message_text(
+                    "📋 Активных заявок нет! Можно выдохнуть и выпить кофе! ☕",
+                    reply_markup=keyboard
+                )
+                return
+            
+            # Создаем сообщение с активными заявками
+            active_text = f"📋 Найдено {len(active_requests)} активных заявок:\n\n"
+            
+            for i, request in enumerate(active_requests, 1):
+                user = session.query(User).filter_by(user_id=request.user_id).first()
+                chat_name = "Чат #1" if request.chat_id == CHAT_ID_1 else "Чат #2"
+                
+                user_name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
+                username = f"@{user.username}" if user and user.username else "отсутствует"
+                
+                active_text += f"{i}. <b>Заявка #{request.id}</b>\n"
+                active_text += f"👤 Пользователь: {user_name}\n"
+                active_text += f"🆔 ID: <code>{request.user_id}</code>\n"
+                active_text += f"👤 Username: {username}\n"
+                active_text += f"🎯 Чат: {chat_name}\n"
+                active_text += f"⏱ Дата создания: {request.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            
+            # Добавляем кнопки для действий с заявками
             keyboard = types.InlineKeyboardMarkup([
-                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+                [types.InlineKeyboardButton("👍 Одобрить все", callback_data="approve_all_requests")],
+                [types.InlineKeyboardButton("👎 Отклонить все", callback_data="reject_all_requests")],
+                [types.InlineKeyboardButton("↩️ Назад в меню админа", callback_data="back_to_admin")]
             ])
-            await callback_query.edit_message_text("Список активных заявок пуст.", reply_markup=keyboard)
-            return
-        
-        requests_text = "📋 Активные заявки (ожидают рассмотрения):\n\n"
-        
-        for req in requests:
-            try:
-                user = session.query(User).filter_by(user_id=req.user_id).first()
-                username = f"@{user.username}" if user and user.username else "нет"
-                name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
-                
-                # Получаем расширенную информацию через API
-                user_info = await client.get_users(req.user_id)
-                
-                chat_name = "Чат #1" if req.chat_id == CHAT_ID_1 else "Чат #2"
-                
-                # Статусы заявок
-                if req.status == "pending":
-                    status_emoji = "⏳"
-                    status_text = "Обрабатывается"
-                elif req.status == "manual_check":
-                    status_emoji = "👨‍💼"
-                    status_text = "Ожидает ручного добавления"
-                else:
-                    status_emoji = "❓"
-                    status_text = req.status
-                
-                # Получаем дополнительную информацию
-                premium_status = "✅" if hasattr(user_info, "is_premium") and user_info.is_premium else "❌"
-                language_code = user_info.language_code or "неизвестно"
-                is_bot = "✅" if hasattr(user_info, "is_bot") and user_info.is_bot else "❌"
-                is_fake = "✅" if hasattr(user_info, "is_fake") and user_info.is_fake else "❌"
-                is_scam = "✅" if hasattr(user_info, "is_scam") and user_info.is_scam else "❌"
-                
-                # Форматируем информацию о заявке
-                requests_text += f"👤 <b>{name}</b> ({username})\n"
-                requests_text += f"ID: <code>{req.user_id}</code>\n"
-                requests_text += f"Чат: {chat_name}\n"
-                requests_text += f"Статус: {status_emoji} {status_text}\n"
-                requests_text += f"Язык: {language_code} | Premium: {premium_status}\n"
-                requests_text += f"Бот: {is_bot} | Фейк: {is_fake} | Скам: {is_scam}\n"
-                requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-                
-            except Exception as user_err:
-                logger.error(f"Ошибка при получении информации о пользователе {req.user_id}: {user_err}")
-                requests_text += f"ID: {req.user_id}\n"
-                requests_text += f"Ошибка получения данных: {str(user_err)[:100]}\n\n"
-        
-        # Добавляем кнопку назад
-        keyboard = types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
-        ])
-        
-        await callback_query.edit_message_text(requests_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
+            
+            # Добавляем кнопки для каждой заявки
+            for request in active_requests:
+                keyboard.inline_keyboard.append([
+                    types.InlineKeyboardButton(f"👤 Открыть #{request.id}", callback_data=f"show_request_{request.id}")
+                ])
+            
+            await callback_query.edit_message_text(
+                active_text,
+                reply_markup=keyboard,
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении активных заявок: {e}")
+            await callback_query.answer("Ой! Что-то пошло не так при загрузке заявок 😅")
+        finally:
+            session.close()
     except Exception as e:
-        logger.error(f"Ошибка при получении списка активных заявок: {e}")
-        await callback_query.edit_message_text(f"Произошла ошибка при получении списка активных заявок: {str(e)}")
-    finally:
-        session.close()
+        logger.error(f"Ошибка в admin_active_requests_callback: {e}")
+        await callback_query.answer("Произошла ошибка. Попробуй снова!")
 
 @bot.on_callback_query(filters.regex(r"^admin_requests_history$"))
 async def admin_requests_history_callback(client, callback_query):
@@ -1436,11 +1434,12 @@ async def back_to_admin_callback(client, callback_query):
             
             logger.info(f"Администратор {user_id} отменил добавление аккаунта")
         
-        admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
+        admin_text = "🛠️ Панель администратора 🔧\n\n"
+        admin_text += "Привет, супер-админ! 😎 Что будем делать сегодня?"
         
         # Получаем текущий статус автодобавления
         auto_add_enabled = get_setting("auto_add_enabled", "true").lower() == "true"
-        auto_add_button_text = "🔴 Отключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
+        auto_add_button_text = "🔴 Выключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
         auto_add_callback = "toggle_auto_add_off" if auto_add_enabled else "toggle_auto_add_on"
         
         keyboard = types.InlineKeyboardMarkup([
@@ -1479,7 +1478,7 @@ async def back_to_admin_callback(client, callback_query):
     except Exception as e:
         logger.error(f"Ошибка при возврате в панель администратора: {e}")
         try:
-            await callback_query.answer("Произошла ошибка. Пожалуйста, используйте команду /admin")
+            await callback_query.answer("Произошла ошибка. Используй команду /admin")
         except:
             pass
 
@@ -1682,7 +1681,7 @@ async def settings_command(client, message):
     notify_on_startup = get_setting("notify_on_startup", "true")
     notify_status = "✅ Включено" if notify_on_startup.lower() == "true" else "❌ Отключено"
     
-    settings_text = "⚙️ Настройки бота:\n\n"
+    settings_text = "⚙️ Настройки твоего бота 🤖\n\n"
     settings_text += f"🔄 Автоматическое добавление: {auto_add_status}\n"
     settings_text += f"🔔 Уведомления о заявках при запуске: {notify_status}\n"
     
@@ -1693,11 +1692,11 @@ async def settings_command(client, message):
             callback_data="toggle_auto_add_off" if auto_add_enabled.lower() == "true" else "toggle_auto_add_on"
         )],
         [types.InlineKeyboardButton(
-            "🔔 Уведомления при запуске: выключить" if notify_on_startup.lower() == "true" else "🔔 Уведомления при запуске: включить", 
+            "🔔 Уведомления: выключить" if notify_on_startup.lower() == "true" else "🔔 Уведомления: включить", 
             callback_data="toggle_notify_off" if notify_on_startup.lower() == "true" else "toggle_notify_on"
         )],
-        [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
-        [types.InlineKeyboardButton("↩️ Назад в меню администратора", callback_data="back_to_admin")]
+        [types.InlineKeyboardButton("✏️ Настройка текстов", callback_data="ui_text_settings")],
+        [types.InlineKeyboardButton("↩️ Назад в меню админа", callback_data="back_to_admin")]
     ])
     
     await message.reply(settings_text, reply_markup=keyboard)
@@ -1797,15 +1796,15 @@ async def ui_text_settings_callback(client, callback_query):
     Меню настройки текстов пользовательского интерфейса
     """
     try:
-        ui_text_menu = "✏️ Настройка текстов интерфейса:\n\n"
-        ui_text_menu += "Выберите, какой текст вы хотите изменить:\n\n"
+        ui_text_menu = "✏️ Настройка текстов интерфейса 💬\n\n"
+        ui_text_menu += "Какой текст хочешь изменить? Выбирай! 👇\n\n"
         ui_text_menu += "📝 <b>Тексты кнопок:</b>\n"
         
         # Создаем клавиатуру с кнопками для редактирования различных текстов
         keyboard = types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton("✏️ Кнопка 'Хочу в чат'", callback_data="edit_button_join_text")],
-            [types.InlineKeyboardButton("✏️ Кнопка 'Узнать подробности'", callback_data="edit_button_info_text")],
-            [types.InlineKeyboardButton("✏️ Кнопка 'Поддержка'", callback_data="edit_button_support_text")],
+            [types.InlineKeyboardButton("✏️ Кнопка 'Вступить в чат'", callback_data="edit_button_join_text")],
+            [types.InlineKeyboardButton("✏️ Кнопка 'Что тут у вас?'", callback_data="edit_button_info_text")],
+            [types.InlineKeyboardButton("✏️ Кнопка 'Нужна помощь'", callback_data="edit_button_support_text")],
             [types.InlineKeyboardButton("✏️ Приветственное сообщение", callback_data="edit_welcome_message")],
             [types.InlineKeyboardButton("───────────────────", callback_data="preview_no_action")],
             [types.InlineKeyboardButton("📄 <b>Содержимое сообщений:</b>", callback_data="preview_no_action")],
@@ -1821,7 +1820,7 @@ async def ui_text_settings_callback(client, callback_query):
         await callback_query.edit_message_text(ui_text_menu, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         logger.error(f"Ошибка при отображении меню настройки текстов интерфейса: {e}")
-        await callback_query.answer("Произошла ошибка при загрузке настроек текстов")
+        await callback_query.answer("Упс! Не могу загрузить настройки текстов 😅")
 
 @bot.on_callback_query(filters.regex(r"^edit_(\w+)$"))
 async def edit_ui_text_callback(client, callback_query):
@@ -2135,7 +2134,7 @@ async def handle_new_ui_text(client, message):
             setting_name = get_setting(f"temp_editing_{user_id}", "")
             
             if not setting_name:
-                await message.reply("Ошибка: не найдена редактируемая настройка.")
+                await message.reply("Ой! Не могу найти настройку, которую редактируем 🤔")
                 return
             
             # Сохраняем новый текст
@@ -2147,18 +2146,18 @@ async def handle_new_ui_text(client, message):
             set_setting(f"temp_editing_{user_id}", "")
             
             # Отправляем сообщение об успехе
-            success_message = f"✅ Текст успешно изменен!\n\nНовый текст:\n<code>{new_text}</code>"
+            success_message = f"✅ Текст успешно обновлен! 🎉\n\nТеперь он выглядит так:\n<code>{new_text}</code>"
             
             # Создаем кнопки для возврата в меню настроек
             keyboard = types.InlineKeyboardMarkup([
                 [types.InlineKeyboardButton("↩️ Назад к настройкам текстов", callback_data="ui_text_settings")],
-                [types.InlineKeyboardButton("🔍 Посмотреть изменения", callback_data="preview_ui_changes")]
+                [types.InlineKeyboardButton("🔍 Посмотреть как будет выглядеть", callback_data="preview_ui_changes")]
             ])
             
             await message.reply(success_message, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
         except Exception as e:
             logger.error(f"Ошибка при сохранении нового текста: {e}")
-            await message.reply(f"Произошла ошибка при сохранении текста: {str(e)}")
+            await message.reply(f"Ой! Что-то пошло не так при сохранении: {str(e)} 😅\nПопробуй еще раз!")
     
     # Игнорируем обычные сообщения, если пользователь не в режиме ввода
 
@@ -2169,10 +2168,10 @@ async def preview_ui_changes_callback(client, callback_query):
     """
     try:
         # Получаем настраиваемые тексты из базы данных (с значениями по умолчанию)
-        button_join_text = get_setting("button_join_text", "🚪 Хочу в чат")
-        button_info_text = get_setting("button_info_text", "ℹ️ Узнать подробности")
-        button_support_text = get_setting("button_support_text", "📞 Поддержка")
-        welcome_message = get_setting("welcome_message", "👋 Выберите действие:")
+        button_join_text = get_setting("button_join_text", "🚀 Вступить в чат!")
+        button_info_text = get_setting("button_info_text", "🔍 Что тут у вас?")
+        button_support_text = get_setting("button_support_text", "🆘 Нужна помощь")
+        welcome_message = get_setting("welcome_message", "👋 Хэй! Рады видеть тебя! 😎 Что будем делать?")
         
         # Создаем клавиатуру с новыми кнопками (preview)
         keyboard = types.InlineKeyboardMarkup([
@@ -2182,20 +2181,20 @@ async def preview_ui_changes_callback(client, callback_query):
             [types.InlineKeyboardButton("↩️ Назад к настройкам текстов", callback_data="ui_text_settings")]
         ])
         
-        preview_text = "🔍 Предварительный просмотр интерфейса\n\n"
+        preview_text = "🔍 Вот как это будет выглядеть 👇\n\n"
         preview_text += welcome_message
         
         await callback_query.edit_message_text(preview_text, reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Ошибка при предварительном просмотре интерфейса: {e}")
-        await callback_query.answer("Произошла ошибка при предварительном просмотре")
+        await callback_query.answer("Ой! Не могу показать предпросмотр 😅")
 
 @bot.on_callback_query(filters.regex(r"^preview_no_action$"))
 async def preview_no_action_callback(client, callback_query):
     """
     Заглушка для кнопок в режиме предпросмотра
     """
-    await callback_query.answer("Это только предварительный просмотр")
+    await callback_query.answer("Это просто предпросмотр! Красиво, правда? 😉")
 
 async def shutdown():
     """
@@ -2863,3 +2862,27 @@ async def use_account_callback(client, callback_query):
     """
     await callback_query.answer("Эта функция отключена")
     await back_to_admin_callback(client, callback_query)
+
+@bot.on_callback_query(filters.regex(r"^toggle_auto_add_(on|off)$"))
+async def toggle_auto_add_callback(client, callback_query):
+    """
+    Включение/выключение автоматического добавления пользователей
+    """
+    if callback_query.from_user.id not in ADMIN_IDS:
+        await callback_query.answer("У тебя не хватает прав для этого 😅")
+        return
+    
+    action = callback_query.data.split("_")[-1]
+    new_value = "true" if action == "on" else "false"
+    
+    set_setting("auto_add_enabled", new_value)
+    
+    status_text = "✅ Теперь включено!" if action == "on" else "❌ Теперь выключено!"
+    
+    await callback_query.answer(f"Автодобавление пользователей: {status_text}")
+    
+    # Возвращаемся в меню настроек или админ-панель
+    if "admin" in callback_query.message.text.lower():
+        await back_to_admin_callback(client, callback_query)
+    else:
+        await back_to_settings_callback(client, callback_query)

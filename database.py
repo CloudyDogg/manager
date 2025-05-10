@@ -2,10 +2,10 @@ import os
 import json
 import base64
 import hashlib
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 
@@ -66,6 +66,15 @@ class JoinRequest(Base):
     chat_id = Column(Integer)
     status = Column(String, default="pending")  # pending, approved, rejected
     created_at = Column(DateTime, default=datetime.now)
+
+class RateLimitBlock(Base):
+    __tablename__ = "rate_limit_blocks"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, unique=True)
+    blocked_at = Column(DateTime, default=datetime.now)
+    is_active = Column(Boolean, default=True)
+    reason = Column(String, default="rate_limit_exceeded")  # Причина блокировки
     
 class Settings(Base):
     __tablename__ = "settings"
@@ -99,6 +108,110 @@ def set_setting(key, value):
     except Exception as e:
         session.rollback()
         return False
+    finally:
+        session.close()
+
+def check_rate_limit(user_id, limit=5, period_minutes=1):
+    """
+    Проверяет, превышает ли пользователь лимит заявок за указанный период
+    
+    Args:
+        user_id: ID пользователя
+        limit: Максимальное количество заявок за период
+        period_minutes: Период в минутах, за который считать заявки
+        
+    Returns:
+        (bool, int): Первое значение - превышен ли лимит, второе - текущее количество заявок
+    """
+    session = Session()
+    try:
+        # Сначала проверяем, не заблокирован ли уже пользователь
+        block = session.query(RateLimitBlock).filter_by(user_id=user_id, is_active=True).first()
+        if block:
+            return True, 0
+            
+        # Проверяем количество заявок за последние period_minutes минут
+        time_limit = datetime.now() - timedelta(minutes=period_minutes)
+        count = session.query(func.count(JoinRequest.id)).filter(
+            JoinRequest.user_id == user_id,
+            JoinRequest.created_at >= time_limit
+        ).scalar()
+        
+        return count >= limit, count
+    finally:
+        session.close()
+
+def block_user_rate_limit(user_id, reason="rate_limit_exceeded"):
+    """
+    Блокирует пользователя за превышение лимита запросов
+    
+    Args:
+        user_id: ID пользователя
+        reason: Причина блокировки
+    
+    Returns:
+        bool: Успешно ли выполнена операция
+    """
+    session = Session()
+    try:
+        # Проверяем, есть ли уже блокировка
+        block = session.query(RateLimitBlock).filter_by(user_id=user_id).first()
+        
+        if block:
+            if not block.is_active:
+                block.is_active = True
+                block.blocked_at = datetime.now()
+                block.reason = reason
+        else:
+            block = RateLimitBlock(
+                user_id=user_id,
+                is_active=True,
+                reason=reason
+            )
+            session.add(block)
+            
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        return False
+    finally:
+        session.close()
+
+def unblock_user_rate_limit(user_id):
+    """
+    Разблокирует пользователя, заблокированного за превышение лимита
+    
+    Args:
+        user_id: ID пользователя
+    
+    Returns:
+        bool: Успешно ли выполнена операция
+    """
+    session = Session()
+    try:
+        block = session.query(RateLimitBlock).filter_by(user_id=user_id, is_active=True).first()
+        if block:
+            block.is_active = False
+            session.commit()
+            return True
+        return False
+    except Exception as e:
+        session.rollback()
+        return False
+    finally:
+        session.close()
+
+def get_rate_limited_users():
+    """
+    Возвращает список пользователей, заблокированных за превышение лимита
+    
+    Returns:
+        list: Список объектов RateLimitBlock активных блокировок
+    """
+    session = Session()
+    try:
+        return session.query(RateLimitBlock).filter_by(is_active=True).all()
     finally:
         session.close()
     

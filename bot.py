@@ -10,7 +10,8 @@ from pyrogram.raw import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood, InviteHashExpired
 from cryptography.fernet import Fernet
 import json
-from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine
+from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine, RateLimitBlock, check_rate_limit, block_user_rate_limit, unblock_user_rate_limit, get_rate_limited_users
+import re
 
 # Настройка логирования
 logging.basicConfig(
@@ -496,6 +497,56 @@ async def select_chat_callback(client, callback_query):
             await callback_query.answer("Вы не можете быть добавлены в чат")
             return
         
+        # Проверяем ограничение на количество заявок
+        rate_limited, current_count = check_rate_limit(user_id, limit=5, period_minutes=1)
+        if rate_limited:
+            # Если пользователь превысил лимит, блокируем его и выводим сообщение
+            block_user_rate_limit(user_id)
+            logger.warning(f"Пользователь {user_id} превысил лимит заявок (текущее количество: {current_count}) и был заблокирован")
+            
+            # Информируем пользователя о блокировке
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
+            ])
+            
+            await callback_query.edit_message_text(
+                "⚠️ Вы превысили лимит заявок (5 заявок в минуту).\n\n"
+                "⛔ Вы временно заблокированы. Пожалуйста, обратитесь к администратору.\n\n"
+                "⏳ Повторите попытку позже или свяжитесь с поддержкой для разблокировки.",
+                reply_markup=keyboard
+            )
+            
+            # Уведомляем администраторов о блокировке
+            user_info = await client.get_users(user_id)
+            admin_text = (
+                f"🚫 Пользователь заблокирован за превышение лимита заявок:\n\n"
+                f"👤 <b>Пользователь:</b>\n"
+                f"ID: <code>{user_id}</code>\n"
+                f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+                f"Username: @{user_info.username or 'отсутствует'}\n\n"
+                f"⚠️ <b>Превышен лимит</b>: 5 заявок в минуту\n"
+                f"📅 Дата блокировки: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+            )
+            
+            # Добавляем кнопку разблокировки для админов
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("🔓 Разблокировать", callback_data=f"unblock_rate_limit_{user_id}")]
+            ])
+            
+            for admin_id in ADMIN_IDS:
+                try:
+                    await client.send_message(
+                        admin_id,
+                        admin_text,
+                        reply_markup=keyboard,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    logger.info(f"Администратору {admin_id} отправлено уведомление о блокировке пользователя {user_id}")
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
+            
+            return
+        
         # Создаем заявку на добавление
         join_request = JoinRequest(
             user_id=user_id,
@@ -772,6 +823,7 @@ async def admin_command(client, message):
         [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
         [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
         [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
+        [types.InlineKeyboardButton("⚠️ Пользователи с ограничениями", callback_data="admin_rate_limited_users")],
         [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
@@ -2148,7 +2200,7 @@ async def block_user_callback(client, callback_query):
 @bot.on_callback_query(filters.regex(r"^unblock_user_\d+$"))
 async def unblock_user_callback(client, callback_query):
     """
-    Разблокировка пользователя через просмотр профиля
+    Разблокировка пользователя из черного списка
     """
     user_id = int(callback_query.data.split('_')[2])
     
@@ -2171,3 +2223,139 @@ async def unblock_user_callback(client, callback_query):
         await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
     finally:
         session.close()
+
+@bot.on_callback_query(filters.regex(r"^unblock_rate_limit_\d+$"))
+async def unblock_rate_limit_callback(client, callback_query):
+    """
+    Разблокировка пользователя, заблокированного за превышение лимита заявок
+    """
+    if callback_query.from_user.id not in ADMIN_IDS:
+        await callback_query.answer("У вас нет прав для выполнения этого действия")
+        return
+    
+    # Получаем ID пользователя из callback_data
+    match = re.match(r"^unblock_rate_limit_(\d+)$", callback_query.data)
+    if not match:
+        await callback_query.answer("Неверный формат данных")
+        return
+    
+    user_id = int(match.group(1))
+    logger.info(f"Попытка разблокировки пользователя {user_id} администратором {callback_query.from_user.id}")
+    
+    # Разблокируем пользователя
+    success = unblock_user_rate_limit(user_id)
+    
+    if success:
+        logger.info(f"Пользователь {user_id} успешно разблокирован администратором {callback_query.from_user.id}")
+        await callback_query.answer("Пользователь успешно разблокирован")
+        
+        # Обновляем текст сообщения, удаляя кнопку разблокировки
+        try:
+            user_info = await client.get_users(user_id)
+            updated_text = (
+                f"✅ Пользователь разблокирован:\n\n"
+                f"👤 <b>Пользователь:</b>\n"
+                f"ID: <code>{user_id}</code>\n"
+                f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+                f"Username: @{user_info.username or 'отсутствует'}\n\n"
+                f"🔓 <b>Статус</b>: Разблокирован\n"
+                f"📅 Дата разблокировки: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+                f"👮 Разблокировал: Администратор {callback_query.from_user.id}\n"
+            )
+            
+            await callback_query.edit_message_text(updated_text, parse_mode=enums.ParseMode.HTML)
+            
+            # Отправляем сообщение пользователю о разблокировке
+            try:
+                await client.send_message(
+                    user_id,
+                    "✅ Вы были разблокированы администратором.\n\n"
+                    "Теперь вы снова можете подавать заявки на вступление в чат.\n"
+                    "Но помните о лимите в 5 заявок в минуту."
+                )
+                logger.info(f"Пользователю {user_id} отправлено сообщение о разблокировке")
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение пользователю {user_id} о разблокировке: {e}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении сообщения о разблокировке: {e}")
+            await callback_query.edit_message_text(
+                f"✅ Пользователь {user_id} разблокирован.",
+                parse_mode=enums.ParseMode.HTML
+            )
+    else:
+        logger.warning(f"Не удалось разблокировать пользователя {user_id}")
+        await callback_query.answer("Не удалось разблокировать пользователя. Возможно, он уже разблокирован.")
+
+@bot.on_callback_query(filters.regex(r"^admin_rate_limited_users$"))
+async def admin_rate_limited_users_callback(client, callback_query):
+    """
+    Список пользователей, заблокированных за превышение лимита заявок
+    """
+    try:
+        # Получаем список заблокированных пользователей
+        blocked_users = get_rate_limited_users()
+        
+        if not blocked_users:
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+            ])
+            await callback_query.edit_message_text(
+                "🔍 Нет пользователей с ограничениями по лимиту заявок.",
+                reply_markup=keyboard
+            )
+            return
+        
+        # Формируем сообщение со списком пользователей
+        users_text = "⚠️ Пользователи с ограничениями по лимиту заявок:\n\n"
+        
+        for i, block in enumerate(blocked_users):
+            try:
+                # Получаем информацию о пользователе
+                user_info = await client.get_users(block.user_id)
+                
+                username = f"@{user_info.username}" if user_info.username else "нет"
+                
+                # Форматируем информацию
+                users_text += f"{i+1}. <b>{user_info.first_name} {user_info.last_name or ''}</b> ({username})\n"
+                users_text += f"ID: <code>{block.user_id}</code>\n"
+                users_text += f"Заблокирован: {block.blocked_at.strftime('%d.%m.%Y %H:%M')}\n"
+                users_text += f"Причина: {block.reason}\n\n"
+                
+            except Exception as user_err:
+                logger.error(f"Ошибка при получении информации о пользователе {block.user_id}: {user_err}")
+                users_text += f"{i+1}. ID: <code>{block.user_id}</code>\n"
+                users_text += f"Заблокирован: {block.blocked_at.strftime('%d.%m.%Y %H:%M')}\n"
+                users_text += f"Ошибка получения данных: {str(user_err)[:100]}\n\n"
+        
+        # Создаем клавиатуру с кнопками разблокировки
+        buttons = []
+        for block in blocked_users:
+            buttons.append([types.InlineKeyboardButton(
+                f"🔓 Разблокировать ID: {block.user_id}",
+                callback_data=f"unblock_rate_limit_{block.user_id}"
+            )])
+        
+        # Добавляем кнопку возврата
+        buttons.append([types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")])
+        
+        keyboard = types.InlineKeyboardMarkup(buttons)
+        
+        # Отправляем сообщение
+        await callback_query.edit_message_text(
+            users_text, 
+            reply_markup=keyboard, 
+            parse_mode=enums.ParseMode.HTML
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка пользователей с ограничениями: {e}")
+        
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+        
+        await callback_query.edit_message_text(
+            f"❌ Произошла ошибка при получении списка пользователей с ограничениями: {str(e)[:200]}",
+            reply_markup=keyboard
+        )

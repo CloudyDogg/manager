@@ -141,32 +141,13 @@ async def add_user_to_chat(user_id, chat_id):
     chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
     
     try:
-        # Получаем список всех чатов для админа
-        logger.info("Получаем список чатов")
-        dialogs = []
-        async for dialog in admin_client.get_dialogs():
-            dialogs.append(dialog)
-            logger.info(f"Найден чат: {dialog.chat.title or dialog.chat.first_name} (ID: {dialog.chat.id})")
-        
-        # Ищем чат с заголовком "test"
-        target_chat = None
-        for dialog in dialogs:
-            if dialog.chat.title == "test":
-                target_chat = dialog.chat
-                logger.info(f"Найден нужный чат: {dialog.chat.title} (ID: {dialog.chat.id})")
-                break
-        
-        if not target_chat:
-            logger.error("Не удалось найти целевой чат")
-            return False, "Не удалось найти чат для добавления"
+        # Используем напрямую ID чата
+        logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {chat_id}")
         
         try:
-            # Добавляем пользователя напрямую
-            logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {target_chat.id}")
-            
-            # Используем метод add_chat_members для добавления пользователя
+            # Добавляем пользователя напрямую по ID чата
             await admin_client.add_chat_members(
-                chat_id=target_chat.id,
+                chat_id=chat_id,
                 user_ids=user_id
             )
             
@@ -197,9 +178,8 @@ async def add_user_to_chat(user_id, chat_id):
             logger.warning(f"Пользователь {user_id} не может быть добавлен из-за настроек приватности")
             
             # Если не удалось добавить из-за настроек приватности, отправляем ссылку
-            chat_info = await admin_client.get_chat(target_chat.id)
             invite_link = await admin_client.create_chat_invite_link(
-                chat_id=target_chat.id,
+                chat_id=chat_id,
                 creates_join_request=False
             )
             invite_link_url = invite_link.invite_link

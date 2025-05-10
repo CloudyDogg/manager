@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignK
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
-from config import DATABASE_URL
+from config import DATABASE_URL, CHAT_ID_1, CHAT_ID_2, MAX_ADDS_PER_DAY
 
 # Создание базы данных
 engine = create_engine(DATABASE_URL)
@@ -154,10 +154,12 @@ class DBManager:
             # Получаем все активные аккаунты с доступом к указанному чату
             query = session.query(AdminAccount).filter(AdminAccount.is_active == True)
             
-            # Проверяем доступ к конкретному чату
-            if chat_id == 1:  # Для чата 1
+            # Проверяем доступ к конкретному чату (логика используется для совместимости)
+            # Важно: chat_id может быть полным ID из Telegram (например, -1002698797779)
+            # Но в базе данных мы используем 1 и 2 для чатов 1 и 2
+            if chat_id == CHAT_ID_1 or str(chat_id) == str(CHAT_ID_1):
                 query = query.filter(AdminAccount.chat_1_access == True)
-            else:  # Для чата 2
+            elif chat_id == CHAT_ID_2 or str(chat_id) == str(CHAT_ID_2):
                 query = query.filter(AdminAccount.chat_2_access == True)
             
             # Получаем аккаунты, у которых не исчерпан лимит добавлений за день
@@ -168,9 +170,10 @@ class DBManager:
                 if admin.count_reset_date.date() != current_date:
                     admin.daily_count = 0
                     admin.count_reset_date = datetime.datetime.utcnow()
+                    session.commit()
                 
                 # Если не достигнут лимит добавлений за день, возвращаем этот аккаунт
-                if admin.daily_count < 40:  # Максимум 40 добавлений в день
+                if admin.daily_count < MAX_ADDS_PER_DAY:
                     return admin
             
             # Если нет доступных аккаунтов, возвращаем None

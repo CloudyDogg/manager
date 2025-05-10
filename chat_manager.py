@@ -2,10 +2,15 @@ import logging
 from typing import Tuple, Optional, Dict, Any
 from db_manager import DBManager
 from session_manager import session_manager
+from aiogram import Bot
+from config import BOT_TOKEN
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Инициализация бота
+bot = Bot(token=BOT_TOKEN)
 
 class ChatManager:
     """Класс для управления чатами и добавлением пользователей"""
@@ -29,25 +34,37 @@ class ChatManager:
                 logger.error(f"Нет доступных админов для добавления пользователя {user_id} в чат {chat_id}")
                 return False, "Нет доступных админов для добавления", None
             
-            # Пытаемся добавить пользователя
-            success, message = await session_manager.add_chat_member(
-                admin_id=admin_account.id,
-                chat_id=chat_id,
-                user_id=user_id
-            )
-            
-            if success:
-                # Добавляем запись о пользователе в чате в БД
-                DBManager.add_chat_member(user_id, chat_id, admin_account.id)
+            # Попытка напрямую добавить пользователя через бота
+            try:
+                # Пытаемся добавить пользователя в чат с помощью API бота
+                logger.info(f"Попытка добавить пользователя {user_id} в чат {chat_id} через API бота")
+                await bot.add_chat_member(chat_id=chat_id, user_id=user_id)
                 
-                # Возвращаем успешный результат с данными об админе
+                # Если добавление успешно, обновляем базу данных
+                DBManager.add_chat_member(user_id, chat_id, admin_account.id)
+                DBManager.update_admin_usage(admin_account.id)
+                
+                # Логируем действие
+                DBManager.log_action(
+                    action="add_chat_member",
+                    description=f"Пользователь {user_id} добавлен в чат {chat_id} через API бота",
+                    user_id=user_id,
+                    admin_id=admin_account.id,
+                    chat_id=chat_id
+                )
+                
+                # Возвращаем успешный результат
                 return True, "Пользователь успешно добавлен", {
                     "admin_id": admin_account.id,
                     "admin_username": admin_account.username
                 }
-            else:
+                
+            except Exception as e:
+                error_message = str(e)
+                logger.error(f"Ошибка при добавлении пользователя {user_id} в чат {chat_id}: {error_message}")
+                
                 # Проверяем, связана ли ошибка с настройками приватности
-                if "USER_PRIVACY_RESTRICTED" in message:
+                if "USER_PRIVACY_RESTRICTED" in error_message or "user's privacy" in error_message:
                     # Обновляем статус заявки
                     join_request = DBManager.create_join_request(user_id, chat_id)
                     if join_request:
@@ -58,11 +75,15 @@ class ChatManager:
                         "privacy_restricted": True
                     }
                 
-                # Другие ошибки
-                return False, f"Ошибка при добавлении: {message}", None
+                # Проверяем, связана ли ошибка с правами бота
+                if "bot is not a member" in error_message or "not enough rights" in error_message:
+                    return False, "Бот не имеет прав для добавления пользователей в этот чат", None
+                
+                # Любые другие ошибки
+                return False, f"Ошибка при добавлении: {error_message}", None
                 
         except Exception as e:
-            logger.error(f"Ошибка при добавлении пользователя {user_id} в чат {chat_id}: {e}")
+            logger.error(f"Ошибка при обработке запроса на добавление пользователя {user_id} в чат {chat_id}: {e}")
             return False, f"Внутренняя ошибка: {str(e)}", None
     
     @staticmethod
@@ -174,7 +195,7 @@ class ChatManager:
             session.close()
     
     @staticmethod
-    def get_chat_info(chat_id: int) -> Dict[str, Any]:
+    async def get_chat_info(chat_id: int) -> Dict[str, Any]:
         """
         Получает информацию о чате
         
@@ -191,7 +212,27 @@ class ChatManager:
         if not settings:
             # Импортируем тут, чтобы избежать циклических импортов
             from config import CHATS
+            
+            # Проверяем, существует ли чат в конфигурации
+            if chat_id not in CHATS:
+                logger.warning(f"Чат с ID {chat_id} не найден ни в базе данных, ни в конфигурации")
+                # Возвращаем базовую информацию
+                return {
+                    "id": chat_id,
+                    "name": f"Чат {chat_id}",
+                    "description": "Описание отсутствует",
+                    "join_mode": "auto_approve",
+                    "is_active": True,
+                    "welcome_message": "Добро пожаловать! 🎉"
+                }
+            
             chat_info = CHATS.get(chat_id, {})
+            
+            # Проверяем, есть ли реальные данные в чате
+            if not chat_info:
+                logger.warning(f"Чат с ID {chat_id} указан в конфигурации, но данные отсутствуют")
+            
+            logger.info(f"Используем данные чата {chat_id} из конфигурации: {chat_info}")
             
             return {
                 "id": chat_id,

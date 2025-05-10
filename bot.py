@@ -932,6 +932,7 @@ async def admin_command(client, message):
         [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
+        [types.InlineKeyboardButton("📱 Управление аккаунтами", callback_data="admin_manage_accounts")],
         [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
         [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
     ])
@@ -1222,13 +1223,22 @@ async def admin_unblock_callback(client, callback_query):
 @bot.on_callback_query(filters.regex(r"^admin_add_account$"))
 async def admin_add_account_callback(client, callback_query):
     """
-    Информация о добавлении аккаунта
+    Запуск процесса добавления нового аккаунта администратора
     """
+    # Используем состояние для хранения временных данных
+    admin_id = callback_query.from_user.id
+    
+    # Сохраняем состояние "ожидание телефона"
+    set_setting(f"waiting_phone_{admin_id}", "true")
+    
+    # Отправляем инструкцию
     await callback_query.edit_message_text(
-        "⚙️ Для добавления аккаунта администратора необходимо создать JSON-сессию Pyrogram.\n\n"
-        "Запустите скрипт session_creator.py для авторизации нового аккаунта.",
+        "📱 Добавление нового аккаунта администратора\n\n"
+        "Пожалуйста, отправьте номер телефона в международном формате:\n"
+        "Например: +79001234567\n\n"
+        "❗ Важно: Будет создана сессия Telegram для этого аккаунта. Убедитесь, что у вас есть доступ к этому номеру для получения кода.",
         reply_markup=types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+            [types.InlineKeyboardButton("↩️ Отмена", callback_data="back_to_admin")]
         ])
     )
 
@@ -1250,6 +1260,21 @@ async def back_to_admin_callback(client, callback_query):
     """
     Возврат в панель администратора
     """
+    user_id = callback_query.from_user.id
+    
+    # Проверяем и сбрасываем все состояния пользователя
+    waiting_phone = get_setting(f"waiting_phone_{user_id}", "false")
+    waiting_code = get_setting(f"waiting_code_{user_id}", "false")
+    
+    if waiting_phone.lower() == "true" or waiting_code.lower() == "true":
+        # Сбрасываем состояния
+        set_setting(f"waiting_phone_{user_id}", "false")
+        set_setting(f"waiting_code_{user_id}", "false")
+        set_setting(f"temp_phone_{user_id}", "")
+        set_setting(f"temp_code_hash_{user_id}", "")
+        
+        logger.info(f"Администратор {user_id} отменил добавление аккаунта")
+    
     admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
     
     # Получаем текущий статус автодобавления
@@ -1261,10 +1286,12 @@ async def back_to_admin_callback(client, callback_query):
         [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
         [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
         [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
+        [types.InlineKeyboardButton("⚠️ Пользователи с ограничениями", callback_data="admin_rate_limited_users")],
         [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
+        [types.InlineKeyboardButton("📱 Управление аккаунтами", callback_data="admin_manage_accounts")],
         [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
         [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
     ])
@@ -1713,48 +1740,242 @@ async def back_to_settings_callback(client, callback_query):
         logger.error(f"Ошибка при возврате в меню настроек: {e}")
         await callback_query.answer("Произошла ошибка при возврате в меню настроек")
 
-# Обработчик для получения нового текста настроек
+# Обработчик для получения нового текста настроек и номера телефона/кода
 @bot.on_message(filters.private & filters.user(ADMIN_IDS) & filters.text)
 async def handle_new_ui_text(client, message):
     """
     Обработка нового текста для пользовательского интерфейса
+    или обработка добавления нового аккаунта администратора
     """
     user_id = message.from_user.id
-    waiting_status = get_setting(f"waiting_text_{user_id}", "false")
+    waiting_text = get_setting(f"waiting_text_{user_id}", "false")
+    waiting_phone = get_setting(f"waiting_phone_{user_id}", "false")
+    waiting_code = get_setting(f"waiting_code_{user_id}", "false")
     
-    # Если пользователь не в состоянии ожидания нового текста, игнорируем
-    if waiting_status.lower() != "true":
-        return
-    
-    try:
-        # Получаем имя настройки, которую редактируем
-        setting_name = get_setting(f"temp_editing_{user_id}", "")
+    # Если пользователь в процессе ввода номера телефона для нового аккаунта
+    if waiting_phone.lower() == "true":
+        phone_number = message.text.strip()
         
-        if not setting_name:
-            await message.reply("Ошибка: не найдена редактируемая настройка.")
+        # Валидация номера телефона
+        if not phone_number.startswith("+") or not phone_number[1:].isdigit():
+            await message.reply("❌ Неверный формат номера телефона. Пожалуйста, введите номер в международном формате, например: +79001234567")
             return
         
-        # Сохраняем новый текст
-        new_text = message.text
-        set_setting(setting_name, new_text)
+        try:
+            # Сохраняем номер телефона во временное хранилище
+            set_setting(f"temp_phone_{user_id}", phone_number)
+            
+            # Создаем временного клиента Pyrogram
+            temp_client = Client(
+                name=f"temp_admin_{user_id}",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                in_memory=True
+            )
+            
+            # Запускаем клиент
+            await temp_client.connect()
+            
+            # Отправляем код подтверждения
+            sent_code = await temp_client.send_code(phone_number)
+            
+            # Сохраняем phone_code_hash
+            set_setting(f"temp_code_hash_{user_id}", sent_code.phone_code_hash)
+            
+            # Сохраняем состояние "ожидание кода"
+            set_setting(f"waiting_phone_{user_id}", "false")
+            set_setting(f"waiting_code_{user_id}", "true")
+            
+            # Отправляем сообщение с инструкцией для ввода кода
+            await message.reply(
+                f"📱 Код подтверждения отправлен на номер {phone_number}\n\n"
+                f"Пожалуйста, введите код подтверждения из Telegram:",
+                reply_markup=types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton("↩️ Отмена", callback_data="back_to_admin")]
+                ])
+            )
+            
+            # Отключаем временный клиент
+            await temp_client.disconnect()
+            
+        except Exception as e:
+            logger.error(f"Ошибка при отправке кода подтверждения: {e}")
+            await message.reply(f"❌ Произошла ошибка при отправке кода подтверждения: {str(e)}")
+            
+            # Сбрасываем состояние
+            set_setting(f"waiting_phone_{user_id}", "false")
+            
+        return
+    
+    # Если пользователь в процессе ввода кода подтверждения
+    elif waiting_code.lower() == "true":
+        code = message.text.strip()
         
-        # Сбрасываем состояние ожидания
-        set_setting(f"waiting_text_{user_id}", "false")
-        set_setting(f"temp_editing_{user_id}", "")
+        # Валидация кода
+        if not code.isdigit() or len(code) < 5:
+            await message.reply("❌ Неверный формат кода. Пожалуйста, введите код подтверждения (5 цифр).")
+            return
         
-        # Отправляем сообщение об успехе
-        success_message = f"✅ Текст успешно изменен!\n\nНовый текст:\n<code>{new_text}</code>"
+        try:
+            # Получаем сохраненные данные
+            phone_number = get_setting(f"temp_phone_{user_id}", "")
+            phone_code_hash = get_setting(f"temp_code_hash_{user_id}", "")
+            
+            if not phone_number or not phone_code_hash:
+                raise ValueError("Отсутствуют необходимые данные для авторизации")
+            
+            # Создаем временного клиента Pyrogram
+            temp_client = Client(
+                name=f"temp_admin_{user_id}",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                in_memory=True
+            )
+            
+            # Подключаемся
+            await temp_client.connect()
+            
+            # Пробуем войти в аккаунт
+            await message.reply("⏳ Выполняется вход в аккаунт...")
+            
+            try:
+                # Пытаемся войти с полученным кодом
+                await temp_client.sign_in(
+                    phone_number=phone_number,
+                    phone_code_hash=phone_code_hash,
+                    phone_code=code
+                )
+                
+                # Если нужен пароль, сообщаем об этом
+                if await temp_client.get_password_hint():
+                    await message.reply(
+                        "🔐 Этот аккаунт защищен двухфакторной аутентификацией.\n\n"
+                        "Для безопасности аккаунта, мы не можем автоматически добавить его.\n"
+                        "Пожалуйста, используйте скрипт session_creator.py вместо этого."
+                    )
+                    await temp_client.disconnect()
+                    
+                    # Сбрасываем состояние
+                    set_setting(f"waiting_code_{user_id}", "false")
+                    set_setting(f"temp_phone_{user_id}", "")
+                    set_setting(f"temp_code_hash_{user_id}", "")
+                    
+                    return
+            except errors.SessionPasswordNeeded:
+                # Если требуется пароль
+                await message.reply(
+                    "🔐 Этот аккаунт защищен двухфакторной аутентификацией.\n\n"
+                    "Для безопасности аккаунта, мы не можем автоматически добавить его.\n"
+                    "Пожалуйста, используйте скрипт session_creator.py вместо этого."
+                )
+                await temp_client.disconnect()
+                
+                # Сбрасываем состояние
+                set_setting(f"waiting_code_{user_id}", "false")
+                set_setting(f"temp_phone_{user_id}", "")
+                set_setting(f"temp_code_hash_{user_id}", "")
+                
+                return
+            
+            # Если вход успешный, получаем строку сессии
+            session_string = await temp_client.export_session_string()
+            
+            # Получаем информацию о пользователе
+            me = await temp_client.get_me()
+            
+            # Отключаемся от временного клиента
+            await temp_client.disconnect()
+            
+            # Сохраняем аккаунт в базу данных
+            session = get_session()
+            try:
+                # Проверяем, существует ли уже такой аккаунт
+                existing_account = session.query(AdminAccount).filter_by(phone=phone_number).first()
+                
+                if existing_account:
+                    # Обновляем существующий аккаунт
+                    existing_account.session_data = encrypt_session({"session_string": session_string})
+                    existing_account.active = True
+                    existing_account.last_used = datetime.now()
+                    session.commit()
+                    
+                    await message.reply(
+                        f"✅ Аккаунт {phone_number} успешно обновлен в базе данных!\n\n"
+                        f"👤 Имя: {me.first_name} {me.last_name or ''}\n"
+                        f"👤 Username: @{me.username or 'отсутствует'}"
+                    )
+                else:
+                    # Создаем новый аккаунт
+                    new_account = AdminAccount(
+                        phone=phone_number,
+                        session_data=encrypt_session({"session_string": session_string}),
+                        active=True,
+                        added_by=user_id,
+                        usage_count=0
+                    )
+                    session.add(new_account)
+                    session.commit()
+                    
+                    await message.reply(
+                        f"✅ Аккаунт {phone_number} успешно добавлен в базу данных!\n\n"
+                        f"👤 Имя: {me.first_name} {me.last_name or ''}\n"
+                        f"👤 Username: @{me.username or 'отсутствует'}"
+                    )
+            except Exception as db_error:
+                logger.error(f"Ошибка при сохранении аккаунта в базу данных: {db_error}")
+                await message.reply(f"❌ Произошла ошибка при сохранении аккаунта: {str(db_error)}")
+            finally:
+                session.close()
+            
+            # Сбрасываем состояние
+            set_setting(f"waiting_code_{user_id}", "false")
+            set_setting(f"temp_phone_{user_id}", "")
+            set_setting(f"temp_code_hash_{user_id}", "")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при входе в аккаунт: {e}")
+            await message.reply(f"❌ Произошла ошибка при входе в аккаунт: {str(e)}")
+            
+            # Сбрасываем состояние
+            set_setting(f"waiting_code_{user_id}", "false")
+            set_setting(f"temp_phone_{user_id}", "")
+            set_setting(f"temp_code_hash_{user_id}", "")
         
-        # Создаем кнопки для возврата в меню настроек
-        keyboard = types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton("↩️ Назад к настройкам текстов", callback_data="ui_text_settings")],
-            [types.InlineKeyboardButton("🔍 Посмотреть изменения", callback_data="preview_ui_changes")]
-        ])
-        
-        await message.reply(success_message, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении нового текста: {e}")
-        await message.reply(f"Произошла ошибка при сохранении текста: {str(e)}")
+        return
+    
+    # Если пользователь не в процессе ввода телефона или кода, обрабатываем как ввод текста для настроек
+    elif waiting_text.lower() == "true":
+        try:
+            # Получаем имя настройки, которую редактируем
+            setting_name = get_setting(f"temp_editing_{user_id}", "")
+            
+            if not setting_name:
+                await message.reply("Ошибка: не найдена редактируемая настройка.")
+                return
+            
+            # Сохраняем новый текст
+            new_text = message.text
+            set_setting(setting_name, new_text)
+            
+            # Сбрасываем состояние ожидания
+            set_setting(f"waiting_text_{user_id}", "false")
+            set_setting(f"temp_editing_{user_id}", "")
+            
+            # Отправляем сообщение об успехе
+            success_message = f"✅ Текст успешно изменен!\n\nНовый текст:\n<code>{new_text}</code>"
+            
+            # Создаем кнопки для возврата в меню настроек
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("↩️ Назад к настройкам текстов", callback_data="ui_text_settings")],
+                [types.InlineKeyboardButton("🔍 Посмотреть изменения", callback_data="preview_ui_changes")]
+            ])
+            
+            await message.reply(success_message, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении нового текста: {e}")
+            await message.reply(f"Произошла ошибка при сохранении текста: {str(e)}")
+    
+    # Игнорируем обычные сообщения, если пользователь не в режиме ввода
 
 @bot.on_callback_query(filters.regex(r"^preview_ui_changes$"))
 async def preview_ui_changes_callback(client, callback_query):
@@ -2481,3 +2702,253 @@ async def admin_rate_limited_users_callback(client, callback_query):
             f"❌ Произошла ошибка при получении списка пользователей с ограничениями: {str(e)[:200]}",
             reply_markup=keyboard
         )
+
+@bot.on_callback_query(filters.regex(r"^admin_manage_accounts$"))
+async def admin_manage_accounts_callback(client, callback_query):
+    """
+    Просмотр и управление админ-аккаунтами
+    """
+    try:
+        session = get_session()
+        accounts = session.query(AdminAccount).all()
+        
+        if not accounts:
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("➕ Добавить новый аккаунт", callback_data="admin_add_account")],
+                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+            ])
+            await callback_query.edit_message_text(
+                "📱 Список аккаунтов администраторов\n\n"
+                "На данный момент нет добавленных аккаунтов администраторов.\n"
+                "Нажмите кнопку ниже, чтобы добавить новый аккаунт.",
+                reply_markup=keyboard
+            )
+            return
+        
+        accounts_text = "📱 Список аккаунтов администраторов:\n\n"
+        
+        # Получаем текущий активный аккаунт
+        active_account = None
+        global active_admin_client
+        if active_admin_client and hasattr(active_admin_client, "_phone"):
+            active_phone = active_admin_client._phone
+            active_account = next((a for a in accounts if a.phone == active_phone), None)
+        
+        for i, account in enumerate(accounts):
+            # Форматируем информацию об аккаунте
+            status = "✅ Активен" if account.active else "❌ Отключен"
+            current = "👉 Текущий" if active_account and account.phone == active_account.phone else ""
+            
+            accounts_text += f"{i+1}. <b>Телефон:</b> {account.phone}\n"
+            accounts_text += f"   <b>Статус:</b> {status} {current}\n"
+            accounts_text += f"   <b>Использований:</b> {account.usage_count}\n"
+            accounts_text += f"   <b>Последнее использование:</b> {account.last_used.strftime('%d.%m.%Y %H:%M') if account.last_used else 'Никогда'}\n\n"
+        
+        # Создаем кнопки для управления аккаунтами
+        buttons = []
+        
+        # Добавляем кнопку для каждого аккаунта
+        for account in accounts:
+            # Формируем текст кнопки в зависимости от статуса
+            if not account.active:
+                button_text = f"🔄 Активировать {account.phone}"
+                callback_data = f"activate_account_{account.id}"
+            else:
+                button_text = f"🛑 Деактивировать {account.phone}"
+                callback_data = f"deactivate_account_{account.id}"
+            
+            buttons.append([types.InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        # Кнопка для переключения на другой аккаунт
+        if len(accounts) > 1:
+            buttons.append([types.InlineKeyboardButton("🔄 Переключиться на другой аккаунт", callback_data="switch_active_account")])
+        
+        # Кнопки для добавления и выхода
+        buttons.append([types.InlineKeyboardButton("➕ Добавить новый аккаунт", callback_data="admin_add_account")])
+        buttons.append([types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")])
+        
+        keyboard = types.InlineKeyboardMarkup(buttons)
+        
+        await callback_query.edit_message_text(accounts_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка аккаунтов администраторов: {e}")
+        
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+        
+        await callback_query.edit_message_text(
+            f"❌ Произошла ошибка при получении списка аккаунтов: {str(e)[:200]}",
+            reply_markup=keyboard
+        )
+    finally:
+        session.close()
+
+@bot.on_callback_query(filters.regex(r"^activate_account_(\d+)$"))
+async def activate_account_callback(client, callback_query):
+    """
+    Активация аккаунта администратора
+    """
+    try:
+        account_id = int(callback_query.data.split("_")[-1])
+        
+        session = get_session()
+        account = session.query(AdminAccount).filter_by(id=account_id).first()
+        
+        if not account:
+            await callback_query.answer("Аккаунт не найден")
+            return
+        
+        # Активируем аккаунт
+        account.active = True
+        session.commit()
+        
+        await callback_query.answer(f"Аккаунт {account.phone} активирован")
+        
+        # Обновляем список аккаунтов
+        await admin_manage_accounts_callback(client, callback_query)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при активации аккаунта: {e}")
+        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+    finally:
+        session.close()
+
+@bot.on_callback_query(filters.regex(r"^deactivate_account_(\d+)$"))
+async def deactivate_account_callback(client, callback_query):
+    """
+    Деактивация аккаунта администратора
+    """
+    try:
+        account_id = int(callback_query.data.split("_")[-1])
+        
+        session = get_session()
+        account = session.query(AdminAccount).filter_by(id=account_id).first()
+        
+        if not account:
+            await callback_query.answer("Аккаунт не найден")
+            return
+        
+        # Проверяем, не является ли этот аккаунт последним активным
+        active_accounts_count = session.query(AdminAccount).filter_by(active=True).count()
+        
+        if active_accounts_count <= 1 and account.active:
+            await callback_query.answer("Нельзя деактивировать последний активный аккаунт")
+            return
+        
+        # Деактивируем аккаунт
+        account.active = False
+        session.commit()
+        
+        await callback_query.answer(f"Аккаунт {account.phone} деактивирован")
+        
+        # Если деактивируемый аккаунт является текущим активным, сбрасываем его
+        global active_admin_client
+        if active_admin_client and hasattr(active_admin_client, "_phone") and active_admin_client._phone == account.phone:
+            try:
+                await active_admin_client.stop()
+            except Exception as e:
+                logger.error(f"Ошибка при остановке клиента: {e}")
+            active_admin_client = None
+        
+        # Обновляем список аккаунтов
+        await admin_manage_accounts_callback(client, callback_query)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при деактивации аккаунта: {e}")
+        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+    finally:
+        session.close()
+
+@bot.on_callback_query(filters.regex(r"^switch_active_account$"))
+async def switch_active_account_callback(client, callback_query):
+    """
+    Меню выбора активного аккаунта администратора
+    """
+    try:
+        session = get_session()
+        active_accounts = session.query(AdminAccount).filter_by(active=True).all()
+        
+        if not active_accounts:
+            await callback_query.answer("Нет активных аккаунтов")
+            return
+        
+        if len(active_accounts) == 1:
+            await callback_query.answer("Есть только один активный аккаунт")
+            return
+        
+        # Создаем текст с информацией
+        switch_text = "🔄 Выберите аккаунт для использования:\n\n"
+        
+        # Получаем текущий активный аккаунт
+        current_active = None
+        global active_admin_client
+        if active_admin_client and hasattr(active_admin_client, "_phone"):
+            current_active = active_admin_client._phone
+        
+        # Создаем кнопки для каждого активного аккаунта
+        buttons = []
+        for account in active_accounts:
+            # Пропускаем текущий активный аккаунт
+            if current_active and account.phone == current_active:
+                continue
+                
+            buttons.append([types.InlineKeyboardButton(
+                f"📱 {account.phone}",
+                callback_data=f"use_account_{account.id}"
+            )])
+        
+        buttons.append([types.InlineKeyboardButton("↩️ Назад", callback_data="admin_manage_accounts")])
+        
+        keyboard = types.InlineKeyboardMarkup(buttons)
+        
+        await callback_query.edit_message_text(switch_text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при отображении меню выбора аккаунта: {e}")
+        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+    finally:
+        session.close()
+
+@bot.on_callback_query(filters.regex(r"^use_account_(\d+)$"))
+async def use_account_callback(client, callback_query):
+    """
+    Переключение на выбранный аккаунт администратора
+    """
+    try:
+        account_id = int(callback_query.data.split("_")[-1])
+        
+        # Останавливаем текущий клиент, если он есть
+        global active_admin_client
+        if active_admin_client and active_admin_client.is_connected:
+            try:
+                await active_admin_client.stop()
+            except Exception as e:
+                logger.error(f"Ошибка при остановке клиента: {e}")
+            active_admin_client = None
+        
+        # Очищаем глобальную переменную
+        active_admin_client = None
+        
+        # Отправляем уведомление о переключении
+        await callback_query.answer("Переключение на выбранный аккаунт...")
+        
+        # При следующем вызове get_admin_client() будет выбран новый аккаунт
+        # Запускаем принудительно get_admin_client() для обновления активного клиента
+        new_client = await get_admin_client()
+        
+        if new_client:
+            # Получаем информацию о новом аккаунте
+            me = await new_client.get_me()
+            await callback_query.answer(f"Переключено на {me.first_name} {me.last_name or ''}")
+        else:
+            await callback_query.answer("Не удалось переключиться на выбранный аккаунт")
+        
+        # Возвращаемся к управлению аккаунтами
+        await admin_manage_accounts_callback(client, callback_query)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при переключении на выбранный аккаунт: {e}")
+        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+        await admin_manage_accounts_callback(client, callback_query)

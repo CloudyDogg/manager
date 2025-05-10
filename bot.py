@@ -2775,6 +2775,7 @@ async def unblock_rate_limit_callback(client, callback_query):
     logger.info(f"Попытка разблокировки пользователя {user_id} администратором {callback_query.from_user.id}")
     
     # Разблокируем пользователя
+    from database import unblock_user_rate_limit
     success = unblock_user_rate_limit(user_id)
     
     if success:
@@ -2826,6 +2827,7 @@ async def admin_rate_limited_users_callback(client, callback_query):
     """
     try:
         # Получаем список заблокированных пользователей
+        from database import get_rate_limited_users
         blocked_users = get_rate_limited_users()
         
         if not blocked_users:
@@ -2903,122 +2905,125 @@ async def admin_manage_accounts_callback(client, callback_query):
         await callback_query.answer("Загружаем список аккаунтов...")
         
         session = get_session()
-        accounts = session.query(AdminAccount).all()
-        
-        logger.info(f"Найдено {len(accounts)} аккаунтов администраторов")
-        
-        if not accounts:
-            keyboard = types.InlineKeyboardMarkup([
-                [types.InlineKeyboardButton("➕ Добавить новый аккаунт", callback_data="admin_add_account")],
-                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
-            ])
-            await callback_query.edit_message_text(
-                "📱 Список аккаунтов администраторов\n\n"
-                "На данный момент нет добавленных аккаунтов администраторов.\n"
-                "Нажмите кнопку ниже, чтобы добавить новый аккаунт.",
-                reply_markup=keyboard
-            )
-            return
-        
-        accounts_text = "📱 Список аккаунтов администраторов:\n\n"
-        
-        # Получаем текущий активный аккаунт
-        active_account = None
-        global active_admin_client
-        if active_admin_client and hasattr(active_admin_client, "_phone"):
-            active_phone = active_admin_client._phone
-            active_account = next((a for a in accounts if a.phone == active_phone), None)
-        
-        # Безопасное отображение HTML
-        def safe_html(text):
-            if text is None:
-                return ""
-            return html.escape(str(text))
-        
-        for i, account in enumerate(accounts):
-            # Форматируем информацию об аккаунте
-            status = "✅ Активен" if account.active else "❌ Отключен"
-            current = "👉 Текущий" if active_account and account.phone == active_account.phone else ""
-            
-            accounts_text += f"{i+1}. <b>Телефон:</b> {safe_html(account.phone)}\n"
-            accounts_text += f"   <b>Статус:</b> {status} {current}\n"
-            accounts_text += f"   <b>Использований:</b> {account.usage_count}\n"
-            
-            # Безопасное отображение даты последнего использования
-            last_used = "Никогда"
-            if account.last_used:
-                try:
-                    last_used = account.last_used.strftime('%d.%m.%Y %H:%M')
-                except Exception as date_err:
-                    logger.error(f"Ошибка форматирования даты: {date_err}")
-                    last_used = "Ошибка даты"
-            
-            accounts_text += f"   <b>Последнее использование:</b> {last_used}\n\n"
-        
-        # Создаем кнопки для управления аккаунтами
-        buttons = []
-        
-        # Добавляем кнопку для каждого аккаунта
-        for account in accounts:
-            # Формируем текст кнопки в зависимости от статуса
-            phone_display = account.phone if len(account.phone) <= 12 else f"{account.phone[:9]}..."
-            
-            if not account.active:
-                button_text = f"🔄 Активировать {phone_display}"
-                callback_data = f"activate_account_{account.id}"
-            else:
-                button_text = f"🛑 Деактивировать {phone_display}"
-                callback_data = f"deactivate_account_{account.id}"
-            
-            buttons.append([types.InlineKeyboardButton(button_text, callback_data=callback_data)])
-        
-        # Кнопка для переключения на другой аккаунт
-        active_accounts = [a for a in accounts if a.active]
-        if len(active_accounts) > 1:
-            buttons.append([types.InlineKeyboardButton("🔄 Переключиться на другой аккаунт", callback_data="switch_active_account")])
-        
-        # Кнопки для добавления и выхода
-        buttons.append([types.InlineKeyboardButton("➕ Добавить новый аккаунт", callback_data="admin_add_account")])
-        buttons.append([types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")])
-        
-        keyboard = types.InlineKeyboardMarkup(buttons)
-        
         try:
-            logger.info("Отправляем сообщение со списком аккаунтов")
-            await callback_query.edit_message_text(accounts_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
-            logger.info("Сообщение успешно отправлено")
-        except errors.MessageNotModified:
-            logger.warning("Сообщение не было изменено (уже содержит актуальную информацию)")
-            await callback_query.answer("Список аккаунтов актуален")
-        except Exception as msg_error:
-            logger.error(f"Ошибка при отправке сообщения: {msg_error}")
+            accounts = session.query(AdminAccount).all()
             
-            # Поотладочно выведем длину сообщения
-            logger.error(f"Длина сообщения: {len(accounts_text)} символов")
+            logger.info(f"Найдено {len(accounts)} аккаунтов администраторов")
             
-            # Попробуем более простое сообщение без HTML
-            simple_text = f"📱 Список аккаунтов администраторов\n\nНайдено {len(accounts)} аккаунтов"
-            try:
+            if not accounts:
+                keyboard = types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton("➕ Добавить новый аккаунт", callback_data="admin_add_account")],
+                    [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+                ])
                 await callback_query.edit_message_text(
-                    simple_text,
-                    reply_markup=types.InlineKeyboardMarkup([
-                        [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
-                    ])
+                    "📱 Список аккаунтов администраторов\n\n"
+                    "На данный момент нет добавленных аккаунтов администраторов.\n"
+                    "Нажмите кнопку ниже, чтобы добавить новый аккаунт.",
+                    reply_markup=keyboard
                 )
-                logger.info("Отправлено упрощенное сообщение без HTML")
-            except Exception as simple_err:
-                logger.error(f"Ошибка при отправке простого сообщения: {simple_err}")
-                # Попробуем отправить еще более простое сообщение
+                return
+            
+            accounts_text = "📱 Список аккаунтов администраторов:\n\n"
+            
+            # Получаем текущий активный аккаунт
+            active_account = None
+            global active_admin_client
+            if active_admin_client and hasattr(active_admin_client, "_phone"):
+                active_phone = active_admin_client._phone
+                active_account = next((a for a in accounts if a.phone == active_phone), None)
+            
+            # Безопасное отображение HTML
+            def safe_html(text):
+                if text is None:
+                    return ""
+                return html.escape(str(text))
+            
+            for i, account in enumerate(accounts):
+                # Форматируем информацию об аккаунте
+                status = "✅ Активен" if account.active else "❌ Отключен"
+                current = "👉 Текущий" if active_account and account.phone == active_account.phone else ""
+                
+                accounts_text += f"{i+1}. <b>Телефон:</b> {safe_html(account.phone)}\n"
+                accounts_text += f"   <b>Статус:</b> {status} {current}\n"
+                accounts_text += f"   <b>Использований:</b> {account.usage_count}\n"
+                
+                # Безопасное отображение даты последнего использования
+                last_used = "Никогда"
+                if account.last_used:
+                    try:
+                        last_used = account.last_used.strftime('%d.%m.%Y %H:%M')
+                    except Exception as date_err:
+                        logger.error(f"Ошибка форматирования даты: {date_err}")
+                        last_used = "Ошибка даты"
+                
+                accounts_text += f"   <b>Последнее использование:</b> {last_used}\n\n"
+            
+            # Создаем кнопки для управления аккаунтами
+            buttons = []
+            
+            # Добавляем кнопку для каждого аккаунта
+            for account in accounts:
+                # Формируем текст кнопки в зависимости от статуса
+                phone_display = account.phone if len(account.phone) <= 12 else f"{account.phone[:9]}..."
+                
+                if not account.active:
+                    button_text = f"🔄 Активировать {phone_display}"
+                    callback_data = f"activate_account_{account.id}"
+                else:
+                    button_text = f"🛑 Деактивировать {phone_display}"
+                    callback_data = f"deactivate_account_{account.id}"
+                
+                buttons.append([types.InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
+            # Кнопка для переключения на другой аккаунт
+            active_accounts = [a for a in accounts if a.active]
+            if len(active_accounts) > 1:
+                buttons.append([types.InlineKeyboardButton("🔄 Переключиться на другой аккаунт", callback_data="switch_active_account")])
+            
+            # Кнопки для добавления и выхода
+            buttons.append([types.InlineKeyboardButton("➕ Добавить новый аккаунт", callback_data="admin_add_account")])
+            buttons.append([types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")])
+            
+            keyboard = types.InlineKeyboardMarkup(buttons)
+            
+            try:
+                logger.info("Отправляем сообщение со списком аккаунтов")
+                await callback_query.edit_message_text(accounts_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
+                logger.info("Сообщение успешно отправлено")
+            except errors.MessageNotModified:
+                logger.warning("Сообщение не было изменено (уже содержит актуальную информацию)")
+                await callback_query.answer("Список аккаунтов актуален")
+            except Exception as msg_error:
+                logger.error(f"Ошибка при отправке сообщения: {msg_error}")
+                
+                # Поотладочно выведем длину сообщения
+                logger.error(f"Длина сообщения: {len(accounts_text)} символов")
+                
+                # Попробуем более простое сообщение без HTML
+                simple_text = f"📱 Список аккаунтов администраторов\n\nНайдено {len(accounts)} аккаунтов"
                 try:
                     await callback_query.edit_message_text(
-                        "Ошибка при загрузке списка аккаунтов",
+                        simple_text,
                         reply_markup=types.InlineKeyboardMarkup([
                             [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
                         ])
                     )
-                except Exception as final_err:
-                    logger.error(f"Критическая ошибка при отправке сообщения: {final_err}")
-                    await callback_query.answer("Не удалось обновить список аккаунтов")
+                    logger.info("Отправлено упрощенное сообщение без HTML")
+                except Exception as simple_err:
+                    logger.error(f"Ошибка при отправке простого сообщения: {simple_err}")
+                    # Попробуем отправить еще более простое сообщение
+                    try:
+                        await callback_query.edit_message_text(
+                            "Ошибка при загрузке списка аккаунтов",
+                            reply_markup=types.InlineKeyboardMarkup([
+                                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+                            ])
+                        )
+                    except Exception as final_err:
+                        logger.error(f"Критическая ошибка при отправке сообщения: {final_err}")
+                        await callback_query.answer("Не удалось обновить список аккаунтов")
+        finally:
+            session.close()
         
     except Exception as e:
         logger.error(f"Ошибка при получении списка аккаунтов администраторов: {e}")
@@ -3038,9 +3043,6 @@ async def admin_manage_accounts_callback(client, callback_query):
                 await callback_query.answer("Произошла ошибка при загрузке списка аккаунтов")
             except:
                 pass
-    finally:
-        if 'session' in locals():
-            session.close()
 
 @bot.on_callback_query(filters.regex(r"^activate_account_(\d+)$"))
 async def activate_account_callback(client, callback_query):

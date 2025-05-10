@@ -39,6 +39,7 @@ class AdminStates(StatesGroup):
     editing_welcome = State()  # Добавлено для редактирования приветствия
     editing_join_mode = State()  # Добавлено для редактирования режима вступления
     searching_user = State()  # Добавлено для поиска пользователя
+    entering_2fa = State()  # Добавлено для ввода пароля 2FA
 
 # Функции для проверки, является ли пользователь администратором
 def is_admin(user_id: int) -> bool:
@@ -757,8 +758,8 @@ async def process_admin_add_account(callback_query: types.CallbackQuery, state: 
         message_id=callback_query.message.message_id,
         text=(
             "🔒 Добавление аккаунта администратора\n\n"
-            "Введите имя пользователя (username) аккаунта-администратора, "
-            "который будет использоваться для добавления участников в чаты.\n\n"
+            "Введите телефонный номер аккаунта-администратора в международном формате "
+            "(например, +79XXXXXXXXX), который будет использоваться для добавления участников в чаты.\n\n"
             "❗ Этот аккаунт должен быть администратором в чатах, куда будут добавляться участники."
         ),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -771,23 +772,102 @@ async def process_admin_add_account(callback_query: types.CallbackQuery, state: 
 
 # Обработчик ввода имени пользователя
 async def process_admin_username_input(message: types.Message, state: FSMContext):
-    """Обработчик ввода имени пользователя администратора"""
+    """Обработчик ввода телефонного номера администратора"""
     # Получаем текущее состояние
     current_state = await state.get_state()
     if current_state != AdminStates.adding_account.state:
         return
     
-    # Получаем введенный юзернейм
+    # Получаем введенный телефонный номер
+    phone = message.text.strip()
+    
+    # Проверяем формат телефонного номера
+    if not phone.startswith('+'):
+        phone = '+' + phone
+    
+    if not phone or len(phone) < 10:
+        await message.answer(
+            "❌ Некорректный номер телефона. Пожалуйста, введите правильный номер телефона в международном формате (например, +79XXXXXXXXX).",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
+            ]])
+        )
+        return
+    
+    # Проверяем, есть ли уже аккаунт с таким номером
+    session = DBManager.get_session()
+    try:
+        from db_manager import AdminAccount
+        existing_account = session.query(AdminAccount).filter(AdminAccount.phone == phone).first()
+        if existing_account:
+            # Если аккаунт существует, проверяем его сессию
+            from session_manager import session_manager
+            if not session_manager.load_session(phone):
+                # Если сессия не существует, предлагаем создать новую
+                await message.answer(
+                    f"⚠️ Аккаунт с номером {phone} существует в базе данных, но сессия не найдена.\n\n"
+                    "Хотите создать новую сессию для этого аккаунта?",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Да, создать сессию", callback_data=f"admin:create_session:{phone}")],
+                        [InlineKeyboardButton(text="Нет, вернуться назад", callback_data="admin:accounts")]
+                    ])
+                )
+                return
+            else:
+                # Если сессия существует, сообщаем об этом
+                await message.answer(
+                    f"⚠️ Аккаунт с номером {phone} уже существует в базе данных и сессия найдена.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
+                    ]])
+                )
+                return
+    finally:
+        session.close()
+    
+    # Сохраняем номер телефона в состоянии
+    await state.update_data(admin_phone=phone)
+    
+    # Запрашиваем имя пользователя
+    await message.answer(
+        f"📱 Номер телефона: {phone}\n\n"
+        "Теперь введите имя пользователя (username) для этого аккаунта (без символа @):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
+        ]])
+    )
+    
+    # Меняем состояние на ввод имени пользователя
+    await state.set_state(AdminStates.confirming_code)
+
+# Обработчик ввода имени пользователя
+async def process_admin_phone_code_input(message: types.Message, state: FSMContext):
+    """Обработчик ввода имени пользователя после телефона"""
+    # Получаем текущее состояние
+    current_state = await state.get_state()
+    if current_state != AdminStates.confirming_code.state:
+        return
+    
+    # Получаем данные из состояния
+    data = await state.get_data()
+    phone = data.get("admin_phone")
+    
+    if not phone:
+        await message.answer("❌ Ошибка: телефонный номер не найден. Пожалуйста, начните заново.")
+        await state.set_state(AdminStates.managing_accounts)
+        return
+    
+    # Получаем введенное имя пользователя
     username = message.text.strip()
     if username.startswith('@'):
         username = username[1:]
     
-    # Проверяем формат юзернейма
+    # Проверяем формат имени пользователя
     if not username or len(username) < 3:
         await message.answer(
             "❌ Некорректное имя пользователя. Пожалуйста, введите правильное имя пользователя (минимум 3 символа).",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
+                InlineKeyboardButton(text="Попробовать снова", callback_data=f"admin:add_account")
             ]])
         )
         return
@@ -798,7 +878,7 @@ async def process_admin_username_input(message: types.Message, state: FSMContext
         session = DBManager.get_session()
         from db_manager import AdminAccount
         
-        # Проверяем, не существует ли уже такого аккаунта
+        # Проверяем, не существует ли уже такого аккаунта по имени пользователя
         existing_account = session.query(AdminAccount).filter(AdminAccount.username == username).first()
         if existing_account:
             await message.answer(
@@ -809,16 +889,10 @@ async def process_admin_username_input(message: types.Message, state: FSMContext
             )
             return
         
-        # Генерируем фиктивный номер телефона (просто для структуры БД)
-        import random
-        phone_prefix = "+7"
-        phone_body = ''.join([str(random.randint(0, 9)) for _ in range(10)])
-        fake_phone = f"{phone_prefix}{phone_body}"
-        
         # Создаем новую запись
         admin_account = AdminAccount(
             username=username,
-            phone=fake_phone,
+            phone=phone,
             session_file=f"session_{username}",  # Используем имя пользователя в имени файла
             is_active=True,
             chat_1_access=True,
@@ -828,21 +902,24 @@ async def process_admin_username_input(message: types.Message, state: FSMContext
         session.add(admin_account)
         session.commit()
         
-        # Возвращаемся в главное меню управления аккаунтами
-        await state.set_state(AdminStates.managing_accounts)
+        # Получаем ID созданного аккаунта
+        admin_id = admin_account.id
+        
+        # Создаем новую сессию для аккаунта
         await message.answer(
-            f"✅ Аккаунт @{username} успешно добавлен в систему.\n\n"
-            "⚠️ Убедитесь, что этот аккаунт является администратором в чатах, "
-            "куда будут добавляться пользователи.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
-            ]])
+            f"✅ Аккаунт @{username} с номером {phone} добавлен в систему.\n\n"
+            "Теперь необходимо создать сессию для этого аккаунта. "
+            "Нажмите кнопку, чтобы начать процесс авторизации:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Создать сессию", callback_data=f"admin:create_session:{phone}")],
+                [InlineKeyboardButton(text="Пропустить (сделать позже)", callback_data="admin:accounts")]
+            ])
         )
         
         # Логируем действие
         DBManager.log_action(
             action="add_admin_account",
-            description=f"Добавлен аккаунт администратора @{username}",
+            description=f"Добавлен аккаунт администратора @{username} ({phone})",
             admin_id=message.from_user.id
         )
         
@@ -857,244 +934,263 @@ async def process_admin_username_input(message: types.Message, state: FSMContext
     finally:
         session.close()
 
-# Обработчик кнопки обновления сессии
-async def process_admin_refresh_session(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик кнопки обновления сессии аккаунта администратора"""
-    # Получаем список администраторских аккаунтов
-    session = DBManager.get_session()
-    try:
-        from db_manager import AdminAccount
-        accounts = session.query(AdminAccount).all()
-        
-        if not accounts:
-            await bot.edit_message_text(
-                chat_id=callback_query.message.chat.id,
-                message_id=callback_query.message.message_id,
-                text="❌ В системе нет аккаунтов администраторов. Сначала добавьте хотя бы один аккаунт.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
-                ]])
-            )
-            return
-        
-        # Формируем список аккаунтов для выбора
-        text = "🔄 Выберите аккаунт для обновления сессии:"
-        buttons = []
-        
-        for account in accounts:
-            status = "✅ Активен" if account.is_active else "❌ Неактивен"
-            row = [InlineKeyboardButton(
-                text=f"@{account.username} ({account.phone}) - {status}",
-                callback_data=f"admin:refresh_session:{account.id}"
-            )]
-            buttons.append(row)
-        
-        # Добавляем кнопку назад
-        buttons.append([InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")])
-        
-        # Отправляем сообщение с выбором аккаунта
+# Новый обработчик для создания сессии аккаунта администратора
+async def process_admin_create_session(callback_query: types.CallbackQuery, state: FSMContext):
+    """Обработчик кнопки создания сессии администратора"""
+    # Получаем телефон из callback_data
+    phone = callback_query.data.split(":")[2]
+    
+    # Сохраняем данные в состоянии
+    await state.update_data(admin_phone=phone)
+    
+    # Проверяем, существует ли уже сессия
+    from session_manager import session_manager
+    if session_manager.load_session(phone):
         await bot.edit_message_text(
             chat_id=callback_query.message.chat.id,
             message_id=callback_query.message.message_id,
-            text=text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+            text=f"✅ Сессия для номера {phone} уже существует!",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
+            ]])
         )
+        return
+    
+    # Отправляем сообщение с инструкциями
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text=(
+            f"🔒 Создание сессии для администратора с номером {phone}\n\n"
+            "Будет отправлен код авторизации на указанный номер телефона.\n\n"
+            "Нажмите кнопку 'Отправить код', когда будете готовы получить код."
+        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отправить код", callback_data=f"admin:send_code:{phone}")],
+            [InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")]
+        ])
+    )
+
+# Обработчик для отправки кода авторизации
+async def process_admin_send_code(callback_query: types.CallbackQuery, state: FSMContext):
+    """Обработчик кнопки отправки кода авторизации"""
+    # Получаем телефон из callback_data
+    phone = callback_query.data.split(":")[2]
+    
+    # Сохраняем данные в состоянии
+    await state.update_data(admin_phone=phone)
+    
+    # Отправляем сообщение о начале процесса
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text=f"🔄 Отправка кода авторизации на номер {phone}...",
+        reply_markup=None
+    )
+    
+    # Пытаемся отправить код авторизации
+    try:
+        # Создаем временный клиент
+        from pyrogram import Client
+        from config import API_ID, API_HASH
+        
+        temp_client = Client(
+            name=f"temp_{phone}",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            phone_number=phone,
+            in_memory=True
+        )
+        
+        # Отправляем код
+        await temp_client.connect()
+        sent_code = await temp_client.send_code(phone)
+        await temp_client.disconnect()
+        
+        # Сохраняем hash кода в состоянии
+        await state.update_data(phone_code_hash=sent_code.phone_code_hash)
+        
+        # Запрашиваем ввод кода
+        await bot.send_message(
+            chat_id=callback_query.message.chat.id,
+            text=(
+                f"✅ Код авторизации отправлен на номер {phone}.\n\n"
+                "Пожалуйста, введите полученный код:"
+            ),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Отменить", callback_data="admin:accounts")
+            ]])
+        )
+        
+        # Устанавливаем состояние для ввода кода
+        await state.set_state(AdminStates.adding_account)
         
     except Exception as e:
-        logger.error(f"Ошибка при получении списка аккаунтов: {e}")
-        await bot.edit_message_text(
+        logger.error(f"Ошибка при отправке кода авторизации на номер {phone}: {e}")
+        await bot.send_message(
             chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
-            text=f"❌ Произошла ошибка: {str(e)}",
+            text=f"❌ Ошибка при отправке кода авторизации: {str(e)}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
+                InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
             ]])
         )
-    finally:
-        session.close()
 
-# Новые обработчики для редактирования информации о чате
-async def process_edit_chat_info(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик кнопки редактирования информации о чате"""
-    # Получаем ID чата из callback data
-    chat_id = int(callback_query.data.split(":")[2])
+# Обработчик ввода кода авторизации
+async def process_admin_auth_code_input(message: types.Message, state: FSMContext):
+    """Обработчик ввода кода авторизации"""
+    # Получаем текущее состояние
+    current_state = await state.get_state()
+    if current_state != AdminStates.adding_account.state:
+        return
     
-    # Сохраняем выбранный чат в состоянии
-    await state.update_data(edit_chat_id=chat_id)
-    
-    # Получаем информацию о чате
-    chat_info = await chat_manager.get_chat_info(chat_id)
-    
-    # Устанавливаем состояние редактирования информации о чате
-    await state.set_state(AdminStates.editing_chat_info)
-    
-    # Отправляем сообщение с инструкцией
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=(
-            f"📝 Редактирование информации о чате: {chat_info['name']}\n\n"
-            f"Текущее описание:\n{chat_info['description']}\n\n"
-            "Отправьте новое название и описание чата в формате:\n"
-            "Название чата\n---\nОписание чата"
-        ),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=MESSAGES["back_button"], callback_data=f"admin:settings_chat:{chat_id}")
-        ]])
-    )
-
-# Обработчик ввода новой информации о чате
-async def process_edit_chat_info_input(message: types.Message, state: FSMContext):
-    """Обработчик ввода новой информации о чате"""
     # Получаем данные из состояния
     data = await state.get_data()
-    chat_id = data.get("edit_chat_id")
+    phone = data.get("admin_phone")
+    phone_code_hash = data.get("phone_code_hash")
     
-    if not chat_id:
-        await message.answer("❌ Ошибка: не выбран чат для редактирования")
-        await state.set_state(AdminStates.viewing_settings)
-        return
-    
-    # Разбираем введенный текст
-    text = message.text.strip()
-    parts = text.split("---")
-    
-    if len(parts) < 2:
+    if not phone or not phone_code_hash:
         await message.answer(
-            "❌ Неверный формат. Используйте разделитель '---' между названием и описанием.",
+            "❌ Ошибка: не найдены данные для авторизации. Пожалуйста, начните процесс заново.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Попробовать снова", callback_data=f"admin:edit_chat_info:{chat_id}")
+                InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
             ]])
         )
         return
     
-    name = parts[0].strip()
-    description = parts[1].strip()
+    # Получаем введенный код
+    code = message.text.strip()
     
-    if not name or len(name) < 3:
+    # Проверяем формат кода
+    if not code or not code.isdigit() or len(code) < 5:
         await message.answer(
-            "❌ Название чата должно содержать минимум 3 символа.",
+            "❌ Некорректный код авторизации. Пожалуйста, введите корректный код (5 или более цифр).",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Попробовать снова", callback_data=f"admin:edit_chat_info:{chat_id}")
+                InlineKeyboardButton(text="Отменить", callback_data="admin:accounts")
             ]])
         )
         return
     
-    # Обновляем информацию о чате
-    success = chat_manager.update_chat_settings(
-        chat_id=chat_id,
-        name=name,
-        description=description
-    )
+    # Отправляем сообщение о процессе авторизации
+    await message.answer("🔄 Выполняется авторизация, пожалуйста, подождите...")
     
-    if success:
-        await message.answer(
-            f"✅ Информация о чате успешно обновлена!\n\nНазвание: {name}\nОписание: {description}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Вернуться к настройкам чата", callback_data=f"admin:settings_chat:{chat_id}")
-            ]])
+    # Пытаемся авторизоваться и создать сессию
+    try:
+        # Создаем временный клиент
+        from pyrogram import Client
+        from config import API_ID, API_HASH
+        
+        temp_client = Client(
+            name=f"temp_{phone}",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            phone_number=phone,
+            in_memory=True
         )
         
-        # Логируем действие
-        DBManager.log_action(
-            action="edit_chat_info",
-            description=f"Изменена информация о чате {chat_id}",
-            admin_id=message.from_user.id,
-            chat_id=chat_id
-        )
+        # Авторизуемся
+        await temp_client.connect()
         
-        # Обновляем состояние
-        await state.set_state(AdminStates.viewing_settings)
-    else:
-        await message.answer(
-            "❌ Ошибка при обновлении информации о чате.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Попробовать снова", callback_data=f"admin:edit_chat_info:{chat_id}")
-            ]])
-        )
-
-# Обработчик редактирования приветственного сообщения
-async def process_edit_welcome(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик кнопки редактирования приветственного сообщения"""
-    # Получаем ID чата из callback data
-    chat_id = int(callback_query.data.split(":")[2])
-    
-    # Сохраняем выбранный чат в состоянии
-    await state.update_data(edit_chat_id=chat_id)
-    
-    # Получаем информацию о чате
-    chat_info = await chat_manager.get_chat_info(chat_id)
-    
-    # Устанавливаем состояние редактирования приветствия
-    await state.set_state(AdminStates.editing_welcome)
-    
-    # Отправляем сообщение с инструкцией
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=(
-            f"👋 Редактирование приветственного сообщения для: {chat_info['name']}\n\n"
-            f"Текущее приветствие:\n{chat_info['welcome_message']}\n\n"
-            "Отправьте новое приветственное сообщение:"
-        ),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=MESSAGES["back_button"], callback_data=f"admin:settings_chat:{chat_id}")
-        ]])
-    )
-
-# Обработчик ввода нового приветственного сообщения
-async def process_edit_welcome_input(message: types.Message, state: FSMContext):
-    """Обработчик ввода нового приветственного сообщения"""
-    # Получаем данные из состояния
-    data = await state.get_data()
-    chat_id = data.get("edit_chat_id")
-    
-    if not chat_id:
-        await message.answer("❌ Ошибка: не выбран чат для редактирования")
-        await state.set_state(AdminStates.viewing_settings)
-        return
-    
-    # Получаем введенный текст
-    welcome_message = message.text.strip()
-    
-    if not welcome_message or len(welcome_message) < 10:
-        await message.answer(
-            "❌ Приветственное сообщение должно содержать минимум 10 символов.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Попробовать снова", callback_data=f"admin:edit_welcome:{chat_id}")
-            ]])
-        )
-        return
-    
-    # Обновляем приветственное сообщение
-    success = chat_manager.update_chat_settings(
-        chat_id=chat_id,
-        welcome_message=welcome_message
-    )
-    
-    if success:
-        await message.answer(
-            f"✅ Приветственное сообщение успешно обновлено!\n\n{welcome_message}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Вернуться к настройкам чата", callback_data=f"admin:settings_chat:{chat_id}")
-            ]])
-        )
+        try:
+            await temp_client.sign_in(phone, phone_code_hash, code)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "password" in error_str or "2fa" in error_str:
+                # Если требуется 2FA, запрашиваем пароль
+                await message.answer(
+                    "🔐 Для этого аккаунта требуется двухфакторная аутентификация.\n\n"
+                    "Пожалуйста, введите пароль от аккаунта:",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="Отменить", callback_data="admin:accounts")
+                    ]])
+                )
+                
+                # Устанавливаем состояние для ввода пароля
+                await state.update_data(needs_2fa=True)
+                return
+            else:
+                # Если другая ошибка, выводим её
+                raise e
         
-        # Логируем действие
-        DBManager.log_action(
-            action="edit_welcome_message",
-            description=f"Изменено приветственное сообщение для чата {chat_id}",
-            admin_id=message.from_user.id,
-            chat_id=chat_id
-        )
+        # Получаем информацию о пользователе
+        me = await temp_client.get_me()
         
-        # Обновляем состояние
-        await state.set_state(AdminStates.viewing_settings)
-    else:
+        # Экспортируем строку сессии
+        session_string = await temp_client.export_session_string()
+        
+        # Отключаемся
+        await temp_client.disconnect()
+        
+        # Сохраняем сессию
+        from session_manager import session_manager
+        session_path = session_manager.save_session(phone, session_string)
+        
+        # Обновляем информацию в БД
+        session = DBManager.get_session()
+        try:
+            from db_manager import AdminAccount
+            admin_account = session.query(AdminAccount).filter(AdminAccount.phone == phone).first()
+            
+            if admin_account:
+                admin_account.is_active = True
+                admin_account.username = me.username or admin_account.username
+                session.commit()
+                
+                # Логируем действие
+                DBManager.log_action(
+                    action="create_admin_session",
+                    description=f"Создана сессия для аккаунта администратора @{admin_account.username} ({phone})",
+                    admin_id=message.from_user.id
+                )
+                
+                # Отправляем сообщение об успехе
+                await message.answer(
+                    f"✅ Сессия для аккаунта @{admin_account.username} ({phone}) успешно создана!\n\n"
+                    "Теперь этот аккаунт может быть использован для добавления участников в чаты.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
+                    ]])
+                )
+            else:
+                # Если аккаунт не найден, создаем новый
+                admin_account = AdminAccount(
+                    username=me.username or "unknown",
+                    phone=phone,
+                    session_file=session_path,
+                    is_active=True,
+                    chat_1_access=True,
+                    chat_2_access=True
+                )
+                
+                session.add(admin_account)
+                session.commit()
+                
+                # Логируем действие
+                DBManager.log_action(
+                    action="create_admin_account_and_session",
+                    description=f"Создан новый аккаунт администратора @{me.username or 'unknown'} ({phone}) с сессией",
+                    admin_id=message.from_user.id
+                )
+                
+                # Отправляем сообщение об успехе
+                await message.answer(
+                    f"✅ Создан новый аккаунт администратора @{me.username or 'unknown'} ({phone}) и сессия для него!\n\n"
+                    "Теперь этот аккаунт может быть использован для добавления участников в чаты.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
+                    ]])
+                )
+        finally:
+            session.close()
+        
+        # Возвращаемся в состояние управления аккаунтами
+        await state.set_state(AdminStates.managing_accounts)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при авторизации и создании сессии для {phone}: {e}")
         await message.answer(
-            "❌ Ошибка при обновлении приветственного сообщения.",
+            f"❌ Ошибка при авторизации: {str(e)}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Попробовать снова", callback_data=f"admin:edit_welcome:{chat_id}")
+                InlineKeyboardButton(text="Вернуться к управлению аккаунтами", callback_data="admin:accounts")
             ]])
         )
 
@@ -1239,6 +1335,90 @@ async def process_toggle_active(callback_query: types.CallbackQuery, state: FSMC
             ]])
         )
 
+# Обработчик кнопки обновления сессии
+async def process_admin_refresh_session(callback_query: types.CallbackQuery, state: FSMContext):
+    """Обработчик кнопки обновления сессии аккаунта администратора"""
+    # Получаем список администраторских аккаунтов
+    session = DBManager.get_session()
+    try:
+        from db_manager import AdminAccount
+        accounts = session.query(AdminAccount).all()
+        
+        if not accounts:
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text="❌ В системе нет аккаунтов администраторов. Сначала добавьте хотя бы один аккаунт.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
+                ]])
+            )
+            return
+        
+        # Получаем список всех доступных сессий
+        from session_manager import session_manager
+        available_sessions = session_manager.find_all_sessions()
+        
+        # Формируем список аккаунтов для выбора
+        text = "🔄 Состояние аккаунтов администраторов:\n\n"
+        buttons = []
+        
+        for account in accounts:
+            # Проверяем наличие сессии
+            has_session = account.phone in available_sessions
+            status = "✅ Сессия найдена" if has_session else "❌ Сессия отсутствует"
+            
+            # Добавляем информацию о статусе аккаунта
+            text += f"• @{account.username} ({account.phone}) - {status}\n"
+            
+            # Добавляем кнопку для действия в зависимости от статуса
+            if has_session:
+                # Если сессия есть, предлагаем обновить
+                row = [InlineKeyboardButton(
+                    text=f"🔄 Обновить @{account.username}",
+                    callback_data=f"admin:refresh_session:{account.id}"
+                )]
+            else:
+                # Если сессии нет, предлагаем создать
+                row = [InlineKeyboardButton(
+                    text=f"➕ Создать сессию для @{account.username}",
+                    callback_data=f"admin:create_session:{account.phone}"
+                )]
+            
+            buttons.append(row)
+        
+        # Добавляем кнопку добавления нового аккаунта
+        buttons.append([
+            InlineKeyboardButton(
+                text="➕ Добавить новый аккаунт",
+                callback_data="admin:add_account"
+            )
+        ])
+        
+        # Добавляем кнопку назад
+        buttons.append([InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")])
+        
+        # Отправляем сообщение с выбором аккаунта
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка аккаунтов: {e}")
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text=f"❌ Произошла ошибка: {str(e)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
+            ]])
+        )
+    finally:
+        session.close()
+
 # Регистрация обработчиков админских команд
 def register_admin_handlers(dp):
     """Регистрирует обработчики для админского интерфейса"""
@@ -1251,9 +1431,15 @@ def register_admin_handlers(dp):
     # Регистрация обработчика всех админских callback_query
     dp.callback_query.register(process_admin_callback, lambda c: c.data and c.data.startswith("admin:"))
     
+    # Регистрация новых обработчиков для сессий администраторов
+    dp.callback_query.register(process_admin_create_session, lambda c: c.data and c.data.startswith("admin:create_session:"))
+    dp.callback_query.register(process_admin_send_code, lambda c: c.data and c.data.startswith("admin:send_code:"))
+    
     # Регистрация обработчиков текстовых сообщений в различных состояниях
     dp.message.register(process_admin_username_input, AdminStates.adding_account)
-    dp.message.register(process_edit_chat_info_input, AdminStates.editing_chat_info)
-    dp.message.register(process_edit_welcome_input, AdminStates.editing_welcome)
-
+    dp.message.register(process_admin_phone_code_input, AdminStates.confirming_code)
+    dp.message.register(process_admin_auth_code_input, AdminStates.entering_2fa)
+    dp.message.register(process_edit_chat_info, AdminStates.editing_chat_info)
+    dp.message.register(process_edit_welcome, AdminStates.editing_welcome)
+    
     logger.info("Обработчики админского интерфейса успешно зарегистрированы")

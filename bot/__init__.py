@@ -1,4 +1,12 @@
 # Инициализационный файл пакета bot
+import os
+from pathlib import Path
+
+# Проверяем и создаем необходимые директории
+from config import SESSIONS_DIR
+
+# Создаем директорию для сессий, если она не существует
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 # Делаем базовый импорт сначала
 from .user_interface import bot, dp 

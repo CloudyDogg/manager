@@ -53,22 +53,50 @@ class SessionManager:
     
     def save_session(self, phone, session_string):
         """Сохраняет сессию в зашифрованном виде"""
-        session_path = os.path.join(SESSIONS_DIR, f"{phone}.session")
+        # Нормализуем телефонный номер для использования в имени файла
+        file_name = phone.replace("+", "plus_")
+        session_path = os.path.join(SESSIONS_DIR, f"{file_name}.session")
+        
+        # Создаем директорию, если её нет
+        os.makedirs(SESSIONS_DIR, exist_ok=True)
         
         # Шифруем и сохраняем
         encrypted_session = self.encrypt_session(session_string)
         with open(session_path, 'wb') as f:
             f.write(encrypted_session)
         
+        logger.info(f"Сессия для {phone} успешно сохранена в {session_path}")
         return session_path
     
     def load_session(self, phone):
         """Загружает сессию из файла"""
-        session_path = os.path.join(SESSIONS_DIR, f"{phone}.session")
+        # Нормализуем телефонный номер для поиска файла
+        file_name = phone.replace("+", "plus_")
+        session_path = os.path.join(SESSIONS_DIR, f"{file_name}.session")
         
         if not os.path.exists(session_path):
-            logger.error(f"Сессия для {phone} не найдена")
-            return None
+            logger.error(f"Сессия для {phone} не найдена по пути {session_path}")
+            
+            # Попробуем поискать сессию по ненормализованному имени (для обратной совместимости)
+            legacy_path = os.path.join(SESSIONS_DIR, f"{phone}.session")
+            if os.path.exists(legacy_path):
+                logger.info(f"Найдена сессия в старом формате для {phone}, преобразуем...")
+                try:
+                    # Считываем содержимое старой сессии
+                    with open(legacy_path, 'rb') as f:
+                        encrypted_session = f.read()
+                    
+                    # Сохраняем с новым форматом имени
+                    with open(session_path, 'wb') as f:
+                        f.write(encrypted_session)
+                        
+                    # Удаляем старый файл
+                    os.remove(legacy_path)
+                    logger.info(f"Сессия для {phone} успешно преобразована в новый формат")
+                except Exception as e:
+                    logger.error(f"Ошибка при преобразовании сессии {phone}: {e}")
+            else:
+                return None
         
         try:
             with open(session_path, 'rb') as f:
@@ -76,6 +104,7 @@ class SessionManager:
             
             # Расшифровываем сессию
             session_string = self.decrypt_session(encrypted_session)
+            logger.info(f"Сессия для {phone} успешно загружена")
             return session_string.decode()
         except Exception as e:
             logger.error(f"Ошибка при загрузке сессии {phone}: {e}")
@@ -252,6 +281,30 @@ class SessionManager:
                 'success': False,
                 'error': str(e)
             }
+    
+    def find_all_sessions(self):
+        """Поиск всех доступных сессий"""
+        if not os.path.exists(SESSIONS_DIR):
+            logger.warning(f"Директория сессий {SESSIONS_DIR} не существует")
+            os.makedirs(SESSIONS_DIR, exist_ok=True)
+            return []
+            
+        sessions = []
+        
+        # Получаем список всех файлов .session в директории
+        session_files = [f for f in os.listdir(SESSIONS_DIR) if f.endswith('.session')]
+        
+        # Извлекаем номера телефонов из имен файлов
+        for session_file in session_files:
+            # Обрабатываем имя файла, чтобы получить номер телефона
+            phone = session_file[:-8]  # Удаляем расширение .session
+            if phone.startswith("plus_"):
+                phone = phone.replace("plus_", "+")
+            
+            logger.info(f"Найдена сессия для номера {phone}")
+            sessions.append(phone)
+        
+        return sessions
 
 # Создаем глобальный экземпляр менеджера сессий
 session_manager = SessionManager() 

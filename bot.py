@@ -425,7 +425,7 @@ async def add_user_to_chat(user_id, chat_id):
                     join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
                     if join_request:
                         join_request.status = "approved"
-                            join_request.approved_by = 0
+                        join_request.approved_by = 0
                         join_request.approved_at = datetime.now()
                         session.commit()
                 except Exception as e:

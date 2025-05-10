@@ -43,29 +43,41 @@ class AdminStates(StatesGroup):
 # Функции для проверки, является ли пользователь администратором
 def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором"""
-    logger.info(f"Проверка прав администратора для ID: {user_id}, тип: {type(user_id)}")
-    logger.info(f"Список ID администраторов: {ADMIN_IDS}, типы: {[type(admin_id) for admin_id in ADMIN_IDS]}")
-    
-    # Конвертируем user_id в строку и int для надёжности сравнения
-    user_id_str = str(user_id)
-    user_id_int = int(user_id) if isinstance(user_id, (str, int)) else 0
-    
-    # Проверяем совпадение в виде строки
-    for admin_id in ADMIN_IDS:
-        # Проверка строковых представлений
-        if user_id_str == str(admin_id):
-            logger.info(f"ID {user_id} найден в списке администраторов (строковое сравнение)")
+    try:
+        logger.info(f"Проверка прав администратора для ID: {user_id}, тип: {type(user_id)}")
+        
+        # Быстрая проверка для системных администраторов (можно добавить фиксированные ID)
+        system_admins = [6327802249]
+        if user_id in system_admins:
+            logger.info(f"ID {user_id} является системным администратором")
             return True
         
-        # Проверка числовых представлений
-        admin_id_int = int(admin_id) if isinstance(admin_id, (str, int)) else 0
-        if user_id_int > 0 and admin_id_int > 0 and user_id_int == admin_id_int:
-            logger.info(f"ID {user_id} найден в списке администраторов (числовое сравнение)")
-            return True
-    
-    # Если не найдено совпадений
-    logger.warning(f"ID {user_id} не найден в списке администраторов: {ADMIN_IDS}")
-    return False
+        # Конвертируем user_id в строку и int для надёжности сравнения
+        user_id_str = str(user_id)
+        user_id_int = int(user_id) if isinstance(user_id, (str, int)) else 0
+        
+        logger.info(f"Список ID администраторов: {ADMIN_IDS}, типы: {[type(admin_id) for admin_id in ADMIN_IDS]}")
+        
+        # Проверяем совпадение в виде строки
+        for admin_id in ADMIN_IDS:
+            # Проверка строковых представлений
+            if user_id_str == str(admin_id):
+                logger.info(f"ID {user_id} найден в списке администраторов (строковое сравнение)")
+                return True
+            
+            # Проверка числовых представлений
+            admin_id_int = int(admin_id) if isinstance(admin_id, (str, int)) else 0
+            if user_id_int > 0 and admin_id_int > 0 and user_id_int == admin_id_int:
+                logger.info(f"ID {user_id} найден в списке администраторов (числовое сравнение)")
+                return True
+        
+        # Если не найдено совпадений
+        logger.warning(f"ID {user_id} не найден в списке администраторов: {ADMIN_IDS}")
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка при проверке прав администратора: {e}")
+        # В случае ошибки возвращаем False
+        return False
 
 # Функции для создания клавиатур
 def get_admin_main_keyboard():

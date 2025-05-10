@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Text, func
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Text, func, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
@@ -107,7 +107,7 @@ class DBManager:
         session = Session()
         try:
             # Выполняем простой запрос для проверки соединения
-            session.execute("SELECT 1")
+            session.execute(text("SELECT 1"))
             return True
         except Exception as e:
             logging.error(f"Ошибка при подключении к базе данных: {e}")

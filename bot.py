@@ -610,6 +610,7 @@ async def select_chat_callback(client, callback_query):
                                 reply_markup=keyboard,
                                 parse_mode="HTML"
                             )
+                            logger.info(f"Администратору {admin_id} отправлено текстовое уведомление о заявке пользователя {user_id}")
                     except Exception as e:
                         logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
             else:
@@ -682,7 +683,8 @@ async def admin_command(client, message):
     # Создаем инлайн-клавиатуру для админа
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
-        [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+        [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
+        [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
         [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
@@ -730,23 +732,26 @@ async def admin_users_callback(client, callback_query):
     finally:
         session.close()
 
-@bot.on_callback_query(filters.regex(r"^admin_requests$"))
-async def admin_requests_callback(client, callback_query):
+@bot.on_callback_query(filters.regex(r"^admin_active_requests$"))
+async def admin_active_requests_callback(client, callback_query):
     """
-    Список заявок через клавиатуру
+    Список активных заявок через клавиатуру (pending и manual_check)
     """
     session = get_session()
     try:
-        requests = session.query(JoinRequest).order_by(JoinRequest.created_at.desc()).limit(20).all()
+        # Получаем активные заявки (pending и manual_check)
+        requests = session.query(JoinRequest).filter(
+            JoinRequest.status.in_(["pending", "manual_check"])
+        ).order_by(JoinRequest.created_at.desc()).limit(20).all()
         
         if not requests:
             keyboard = types.InlineKeyboardMarkup([
                 [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
             ])
-            await callback_query.edit_message_text("Список заявок пуст.", reply_markup=keyboard)
+            await callback_query.edit_message_text("Список активных заявок пуст.", reply_markup=keyboard)
             return
         
-        requests_text = "📝 Список последних заявок:\n\n"
+        requests_text = "📋 Активные заявки (ожидают рассмотрения):\n\n"
         
         for req in requests:
             user = session.query(User).filter_by(user_id=req.user_id).first()
@@ -754,13 +759,86 @@ async def admin_requests_callback(client, callback_query):
             name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
             
             chat_name = "Чат #1" if req.chat_id == CHAT_ID_1 else "Чат #2"
-            status_emoji = "✅" if req.status == "approved" else "❌" if req.status == "rejected" else "⏳"
+            
+            if req.status == "pending":
+                status_emoji = "⏳"
+                status_text = "Обрабатывается"
+            elif req.status == "manual_check":
+                status_emoji = "👨‍💼"
+                status_text = "Ожидает ручного добавления"
+            else:
+                status_emoji = "❓"
+                status_text = req.status
             
             requests_text += f"ID: {req.user_id}\n"
             requests_text += f"Имя: {name}\n"
             requests_text += f"Username: {username}\n"
             requests_text += f"Чат: {chat_name}\n"
-            requests_text += f"Статус: {status_emoji} {req.status}\n"
+            requests_text += f"Статус: {status_emoji} {status_text}\n"
+            requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            
+            # Если это заявка, ожидающая ручного добавления, добавляем кнопки
+            if req.status == "manual_check":
+                requests_text += f"⚠️ Эта заявка требует ручного добавления\n\n"
+        
+        # Добавляем кнопку назад
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
+        
+        await callback_query.edit_message_text(requests_text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка активных заявок: {e}")
+        await callback_query.edit_message_text("Произошла ошибка при получении списка активных заявок.")
+    finally:
+        session.close()
+
+@bot.on_callback_query(filters.regex(r"^admin_requests_history$"))
+async def admin_requests_history_callback(client, callback_query):
+    """
+    Список истории заявок через клавиатуру (approved, rejected, link_sent)
+    """
+    session = get_session()
+    try:
+        # Получаем историю заявок (approved, rejected, link_sent)
+        requests = session.query(JoinRequest).filter(
+            JoinRequest.status.in_(["approved", "rejected", "link_sent"])
+        ).order_by(JoinRequest.created_at.desc()).limit(20).all()
+        
+        if not requests:
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+            ])
+            await callback_query.edit_message_text("История заявок пуста.", reply_markup=keyboard)
+            return
+        
+        requests_text = "📚 История заявок (обработанные):\n\n"
+        
+        for req in requests:
+            user = session.query(User).filter_by(user_id=req.user_id).first()
+            username = f"@{user.username}" if user and user.username else "нет"
+            name = f"{user.first_name} {user.last_name or ''}" if user else "Неизвестный пользователь"
+            
+            chat_name = "Чат #1" if req.chat_id == CHAT_ID_1 else "Чат #2"
+            
+            if req.status == "approved":
+                status_emoji = "✅"
+                status_text = "Одобрена"
+            elif req.status == "rejected":
+                status_emoji = "❌"
+                status_text = "Отклонена"
+            elif req.status == "link_sent":
+                status_emoji = "🔗"
+                status_text = "Отправлена инструкция"
+            else:
+                status_emoji = "❓"
+                status_text = req.status
+            
+            requests_text += f"ID: {req.user_id}\n"
+            requests_text += f"Имя: {name}\n"
+            requests_text += f"Username: {username}\n"
+            requests_text += f"Чат: {chat_name}\n"
+            requests_text += f"Статус: {status_emoji} {status_text}\n"
             requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
         
         # Добавляем кнопку назад
@@ -770,8 +848,8 @@ async def admin_requests_callback(client, callback_query):
         
         await callback_query.edit_message_text(requests_text, reply_markup=keyboard)
     except Exception as e:
-        logger.error(f"Ошибка при получении списка заявок: {e}")
-        await callback_query.edit_message_text("Произошла ошибка при получении списка заявок.")
+        logger.error(f"Ошибка при получении истории заявок: {e}")
+        await callback_query.edit_message_text("Произошла ошибка при получении истории заявок.")
     finally:
         session.close()
 
@@ -841,7 +919,8 @@ async def back_to_admin_callback(client, callback_query):
     
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
-        [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+        [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
+        [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
         [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
@@ -877,7 +956,8 @@ async def toggle_auto_add_on_callback(client, callback_query):
         
         keyboard = types.InlineKeyboardMarkup([
             [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
-            [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+            [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
+            [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
             [types.InlineKeyboardButton("🔴 Отключить автодобавление", callback_data="toggle_auto_add_off")],
             [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
             [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
@@ -928,7 +1008,8 @@ async def toggle_auto_add_off_callback(client, callback_query):
         
         keyboard = types.InlineKeyboardMarkup([
             [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
-            [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+            [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
+            [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
             [types.InlineKeyboardButton("🟢 Включить автодобавление", callback_data="toggle_auto_add_on")],
             [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
             [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],

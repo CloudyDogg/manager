@@ -417,62 +417,145 @@ async def add_user_to_chat(user_id, chat_id):
                     except Exception as import_error:
                         logger.error(f"Ошибка при импорте контакта: {import_error}")
                         
-                        # Если ничего не помогло, отправляем пользователю инструкции как в случае с ограничениями приватности
-                        await bot.send_message(
-                            user_id,
-                            f"🔒 К сожалению, из-за ограничений Telegram мы не можем добавить вас в чат автоматически.\n\n"
-                            f"🔍 Чтобы решить эту проблему, вам необходимо изменить настройки конфиденциальности:\n\n"
-                            f"👉 Откройте настройки Telegram\n"
-                            f"👉 Перейдите в раздел 'Конфиденциальность'\n" 
-                            f"👉 Выберите 'Группы и каналы'\n"
-                            f"👉 Для опции 'Кто может добавить меня в группы' выберите 'Все'\n\n"
-                            f"📱 Вот как это выглядит (смотрите приложенные картинки):\n"
-                        )
-                        
-                        # Отправляем инструкции с картинками
+                        # Если ничего не помогло, отправляем контакт администратора пользователю
                         try:
-                            # Отправляем изображения с инструкциями, если они доступны
-                            await bot.send_photo(
-                                user_id,
-                                "screen/1.jpg",
-                                caption="1. Откройте настройки и выберите 'Конфиденциальность'"
-                            )
+                            # Получаем информацию об администраторе
+                            admin_info = await admin_client.get_me()
+                            logger.info(f"Получена информация об администраторе: {admin_info.first_name} {admin_info.last_name or ''}")
                             
-                            await bot.send_photo(
-                                user_id,
-                                "screen/2.jpg",
-                                caption="2. Выберите 'Группы и каналы'"
-                            )
+                            # Получаем телефон администратора (если доступен)
+                            admin_phone = ""
+                            if hasattr(admin_client, '_phone'):
+                                admin_phone = admin_client._phone
+                                logger.info(f"Телефон администратора: {admin_phone}")
                             
-                            await bot.send_photo(
-                                user_id,
-                                "screen/3.jpg",
-                                caption="3. Установите 'Кто может добавить меня в группы' на 'Все'"
-                            )
-                            
+                            # Сначала отправляем информационное сообщение
                             await bot.send_message(
                                 user_id,
-                                "🎉 После изменения настроек вернитесь сюда и повторите попытку! Мы сможем добавить вас автоматически."
+                                f"🔄 К сожалению, мы не смогли добавить вас автоматически в {chat_name}.\n\n"
+                                f"👋 Но не волнуйтесь! Мы нашли решение: добавьте нашего администратора в контакты, "
+                                f"и он сможет вас пригласить!\n\n"
+                                f"👇 Сейчас я отправлю вам контакт администратора. Пожалуйста, добавьте его и напишите ему, "
+                                f"что хотите вступить в чат."
                             )
                             
-                        except Exception as photo_err:
-                            logger.error(f"Ошибка при отправке инструкций с изображениями: {photo_err}")
+                            # Отправляем контакт администратора
+                            await bot.send_contact(
+                                user_id,
+                                phone_number=admin_phone or f"+{admin_info.id}",
+                                first_name=admin_info.first_name,
+                                last_name=admin_info.last_name or ""
+                            )
+                            
+                            # Отправляем сообщение с инструкцией
+                            await bot.send_message(
+                                user_id,
+                                f"✅ Теперь:\n\n"
+                                f"1️⃣ Добавьте этот контакт в свой список контактов\n"
+                                f"2️⃣ Напишите администратору: 'Здравствуйте! Добавьте меня в {chat_name}, пожалуйста.'\n\n"
+                                f"🎯 После этого администратор сможет вас пригласить! Обычно это занимает не более часа."
+                            )
+                            
+                            # Уведомляем администратора
+                            try:
+                                await admin_client.send_message(
+                                    admin_info.id,
+                                    f"👋 Привет! У пользователя {user_info.first_name} {user_info.last_name or ''} (ID: {user_id}) "
+                                    f"возникли проблемы при вступлении в чат.\n\n"
+                                    f"💬 Я отправил ему ваш контакт, чтобы он добавил вас. "
+                                    f"Пожалуйста, добавьте его в {chat_name}, когда он напишет вам."
+                                )
+                            except Exception as admin_notify_error:
+                                logger.error(f"Ошибка при отправке уведомления администратору: {admin_notify_error}")
+                            
+                            # Обновляем статус заявки
+                            session = get_session()
+                            try:
+                                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                if join_request:
+                                    join_request.status = "contact_sent"
+                                    session.commit()
+                            except Exception as db_err:
+                                logger.error(f"Ошибка при обновлении статуса заявки: {db_err}")
+                            finally:
+                                session.close()
+                            
+                            # Отправляем уведомление администраторам
+                            admin_text = (
+                                f"ℹ️ Пользователю отправлен контакт администратора:\n\n"
+                                f"👤 {user_info.first_name} {user_info.last_name or ''} (@{user_info.username or 'нет'})\n"
+                                f"📱 ID: {user_id}\n\n"
+                                f"❗ Причина: не удалось добавить автоматически\n"
+                                f"👤 Отправлен контакт: {admin_info.first_name} {admin_info.last_name or ''}\n"
+                                f"⏰ {datetime.now().strftime('%H:%M:%S %d.%m.%Y')}\n"
+                            )
+                            
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await bot.send_message(admin_id, admin_text)
+                                except Exception as admin_err:
+                                    logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {admin_err}")
+                            
+                            return False, "contact_sent"
+                            
+                        except Exception as contact_send_error:
+                            logger.error(f"Ошибка при отправке контакта администратора: {contact_send_error}")
+                            
+                            # Только если не удалось отправить контакт, отправляем инструкции по настройкам приватности
+                            await bot.send_message(
+                                user_id,
+                                f"🔒 К сожалению, мы не смогли добавить вас в чат. Возможно, дело в настройках Telegram.\n\n"
+                                f"🔍 Чтобы решить эту проблему, попробуйте изменить настройки конфиденциальности:\n\n"
+                                f"👉 Откройте настройки Telegram\n"
+                                f"👉 Перейдите в раздел 'Конфиденциальность'\n" 
+                                f"👉 Выберите 'Группы и каналы'\n"
+                                f"👉 Для опции 'Кто может добавить меня в группы' выберите 'Все'\n\n"
+                                f"📱 Мы приложили инструкции с картинками:"
+                            )
+                            
+                            # Отправляем инструкции с картинками
+                            try:
+                                # Отправляем изображения с инструкциями, если они доступны
+                                await bot.send_photo(
+                                    user_id,
+                                    "screen/1.jpg",
+                                    caption="1. Откройте настройки и выберите 'Конфиденциальность'"
+                                )
+                                
+                                await bot.send_photo(
+                                    user_id,
+                                    "screen/2.jpg",
+                                    caption="2. Выберите 'Группы и каналы'"
+                                )
+                                
+                                await bot.send_photo(
+                                    user_id,
+                                    "screen/3.jpg",
+                                    caption="3. Установите 'Кто может добавить меня в группы' на 'Все'"
+                                )
+                                
+                                await bot.send_message(
+                                    user_id,
+                                    "🎉 После изменения настроек вернитесь сюда и повторите попытку! Мы сможем добавить вас автоматически."
+                                )
+                                
+                            except Exception as photo_err:
+                                logger.error(f"Ошибка при отправке инструкций с изображениями: {photo_err}")
+                            
+                            # Обновляем статус заявки
+                            session = get_session()
+                            try:
+                                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                if join_request:
+                                    join_request.status = "link_sent"
+                                    session.commit()
+                            except Exception as db_err:
+                                logger.error(f"Ошибка при обновлении статуса заявки: {db_err}")
+                            finally:
+                                session.close()
                         
-                        # Обновляем статус заявки
-                        session = get_session()
-                        try:
-                            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                            if join_request:
-                                join_request.status = "link_sent"
-                                session.commit()
-                        except Exception as db_err:
-                            logger.error(f"Ошибка при обновлении статуса заявки: {db_err}")
-                        finally:
-                            session.close()
-                        
-                        # Возвращаем сообщение с информацией о проблеме
-                        return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
-                        
+                            return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
+                
                 raise standard_error
                 
         except UserAlreadyParticipant:

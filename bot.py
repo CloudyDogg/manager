@@ -639,7 +639,7 @@ async def add_user_to_chat(user_id, chat_id):
                             
                             return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
                 
-                raise standard_error
+                # raise standard_error
                 
         except UserAlreadyParticipant:
             logger.info(f"Пользователь {user_id} уже состоит в чате")

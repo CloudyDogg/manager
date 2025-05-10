@@ -130,12 +130,12 @@ async def get_admin_client():
 
 async def add_user_to_chat(user_id, chat_id):
     """
-    Добавление пользователя в чат через одноразовую ссылку
+    Прямое добавление пользователя в чат администратором
     """
     admin_client = await get_admin_client()
     if not admin_client:
         logger.error(f"Нет доступного администратора")
-        return False, "Нет доступного администратора для создания ссылки на чат"
+        return False, "Нет доступного администратора для добавления в чат"
     
     # Определяем имя чата
     chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
@@ -156,63 +156,123 @@ async def add_user_to_chat(user_id, chat_id):
                 logger.info(f"Найден нужный чат: {dialog.chat.title} (ID: {dialog.chat.id})")
                 break
         
-        invite_link_url = None
+        if not target_chat:
+            logger.error("Не удалось найти целевой чат")
+            return False, "Не удалось найти чат для добавления"
         
-        if target_chat:
-            # Пробуем использовать существующую ссылку для чата
-            try:
-                chat_info = await admin_client.get_chat(target_chat.id)
-                if hasattr(chat_info, 'invite_link') and chat_info.invite_link:
-                    # Используем существующую публичную ссылку
-                    invite_link_url = chat_info.invite_link
-                    logger.info(f"Используем существующую ссылку чата: {invite_link_url}")
-                else:
-                    # Создаем постоянную ссылку для чата без ограничений
-                    invite_link = await admin_client.create_chat_invite_link(
-                        chat_id=target_chat.id,
-                        creates_join_request=False
-                    )
-                    invite_link_url = invite_link.invite_link
-                    logger.info(f"Создана новая постоянная ссылка: {invite_link_url}")
-            except Exception as e:
-                logger.error(f"Ошибка при получении/создании ссылки: {e}")
-                # Используем запасную ссылку в случае ошибки
-                invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
-                logger.warning(f"Используем запасную ссылку: {invite_link_url}")
-        else:
-            # Не нашли чат, используем статическую ссылку
-            invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
-            logger.warning(f"Не нашли чат, используем запасную ссылку: {invite_link_url}")
-        
-        # Проверяем, есть ли ссылка
-        if not invite_link_url:
-            logger.error(f"Не удалось получить действительную ссылку на чат")
-            return False, "Не удалось создать ссылку для присоединения к чату"
-        
-        # Отправляем пользователю ссылку
-        await bot.send_message(
-            user_id,
-            f"Для входа в {chat_name} используйте эту ссылку:\n\n"
-            f"{invite_link_url}\n\n"
-            f"Просто нажмите на ссылку и затем на кнопку 'Присоединиться'."
-        )
-        
-        # Обновляем статус заявки
-        session = get_session()
         try:
-            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-            if join_request:
-                join_request.status = "link_sent"
-                session.commit()
+            # Добавляем пользователя напрямую
+            logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {target_chat.id}")
+            
+            # Используем метод add_chat_members для добавления пользователя
+            await admin_client.add_chat_members(
+                chat_id=target_chat.id,
+                user_ids=user_id
+            )
+            
+            logger.info(f"Пользователь {user_id} успешно добавлен в чат")
+            
+            # Отправляем пользователю уведомление об успешном добавлении
+            await bot.send_message(
+                user_id,
+                f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                f"Можете открыть чат в своем приложении Telegram."
+            )
+            
+            # Обновляем статус заявки
+            session = get_session()
+            try:
+                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                if join_request:
+                    join_request.status = "approved"
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+            finally:
+                session.close()
+            
+            return True, "Пользователь успешно добавлен в чат"
+            
+        except UserPrivacyRestricted:
+            logger.warning(f"Пользователь {user_id} не может быть добавлен из-за настроек приватности")
+            
+            # Если не удалось добавить из-за настроек приватности, отправляем ссылку
+            chat_info = await admin_client.get_chat(target_chat.id)
+            invite_link = await admin_client.create_chat_invite_link(
+                chat_id=target_chat.id,
+                creates_join_request=False
+            )
+            invite_link_url = invite_link.invite_link
+            
+            await bot.send_message(
+                user_id,
+                f"⚠️ Из-за ваших настроек приватности вы не можете быть добавлены автоматически.\n\n"
+                f"Для входа в {chat_name} используйте эту ссылку:\n\n"
+                f"{invite_link_url}\n\n"
+                f"Просто нажмите на ссылку и затем на кнопку 'Присоединиться'."
+            )
+            
+            # Обновляем статус заявки
+            session = get_session()
+            try:
+                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                if join_request:
+                    join_request.status = "link_sent"
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+            finally:
+                session.close()
+                
+            return False, "Пользователь не может быть добавлен из-за настроек приватности"
+            
+        except UserAlreadyParticipant:
+            logger.info(f"Пользователь {user_id} уже состоит в чате")
+            
+            await bot.send_message(
+                user_id,
+                f"ℹ️ Вы уже состоите в этом чате. Откройте его в своем приложении Telegram."
+            )
+            
+            # Обновляем статус заявки
+            session = get_session()
+            try:
+                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                if join_request:
+                    join_request.status = "approved"
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+            finally:
+                session.close()
+                
+            return True, "Пользователь уже состоит в чате"
+            
+        except PeerFlood:
+            logger.error(f"Слишком много запросов на добавление, лимит превышен")
+            
+            # Деактивируем текущий аккаунт администратора
+            session = get_session()
+            try:
+                admin_account = session.query(AdminAccount).filter_by(phone=admin_client._phone).first()
+                if admin_account:
+                    admin_account.active = False
+                    session.commit()
+                    logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за лимита добавлений")
+            except Exception as e:
+                logger.error(f"Ошибка при деактивации аккаунта: {e}")
+            finally:
+                session.close()
+                
+            return False, "Достигнут лимит добавлений. Попробуйте позже."
+            
         except Exception as e:
-            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-        finally:
-            session.close()
-        
-        return True, "Пользователю отправлена ссылка для входа в чат"
+            logger.error(f"Ошибка при добавлении пользователя: {e}")
+            return False, f"Не удалось добавить пользователя: {str(e)}"
+            
     except Exception as e:
-        logger.error(f"Ошибка при создании ссылки: {e}")
-        return False, f"Ошибка при отправке ссылки: {str(e)}"
+        logger.error(f"Ошибка при добавлении пользователя: {e}")
+        return False, f"Ошибка при добавлении пользователя: {str(e)}"
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
@@ -283,19 +343,22 @@ async def select_chat_callback(client, callback_query):
         session.add(join_request)
         session.commit()
         
-        # Добавляем пользователя (без дополнительных проверок для упрощения)
+        # Сообщаем пользователю, что его заявка обрабатывается
+        await callback_query.edit_message_text(
+            "⏳ Обрабатываем вашу заявку...\n\n"
+            "Пожалуйста, подождите несколько секунд."
+        )
+        
+        # Добавляем пользователя
         success, message = await add_user_to_chat(user_id, chat_id)
         
         if success:
-            # Обновляем статус заявки и данные пользователя
+            # Если пользователь успешно добавлен, не нужно повторно отправлять сообщение
+            # так как оно уже отправлено в функции add_user_to_chat
+            # Только отмечаем в БД, что пользователь добавлен
             join_request.status = "approved"
             user.chat_joined = chat_id
             session.commit()
-            
-            await callback_query.edit_message_text(
-                f"✅ Вы успешно добавлены в чат!\n\n"
-                f"Спасибо за использование нашего бота."
-            )
             
             # Уведомляем администраторов
             for admin_id in ADMIN_IDS:
@@ -310,26 +373,32 @@ async def select_chat_callback(client, callback_query):
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
         else:
-            # Обновляем статус заявки на отклоненную
-            join_request.status = "rejected"
-            session.commit()
-            
-            # В зависимости от типа ошибки, формируем ответ
+            # Если не получилось добавить, проверяем тип ошибки
             if "приватности" in message:
+                # В случае настроек приватности, ссылка уже отправлена в add_user_to_chat
+                # Не нужно повторно отправлять сообщение
+                join_request.status = "link_sent"
+                session.commit()
+                
+                # Отправляем дополнительные инструкции в текущее сообщение
                 instructions = (
                     "⚠️ Из-за ваших настроек приватности вы не можете быть добавлены автоматически.\n\n"
-                    "Чтобы исправить это:\n"
+                    "Чтобы исправить это для будущих добавлений:\n"
                     "1️⃣ Откройте настройки Telegram\n"
                     "2️⃣ Перейдите в 'Конфиденциальность'\n"
                     "3️⃣ Выберите 'Группы и каналы'\n"
                     "4️⃣ Установите значение 'Все' в разделе 'Кто может добавить меня в группы'\n\n"
-                    "После этого вернитесь и повторите попытку."
+                    "Используйте ссылку, которую я вам отправил для входа в чат."
                 )
                 keyboard = types.InlineKeyboardMarkup([
                     [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
                 ])
                 await callback_query.edit_message_text(instructions, reply_markup=keyboard)
             else:
+                # Для других ошибок обновляем статус и показываем сообщение об ошибке
+                join_request.status = "rejected"
+                session.commit()
+                
                 error_text = f"❌ Не удалось добавить вас в чат: {message}\n\nПопробуйте позже или обратитесь в поддержку."
                 keyboard = types.InlineKeyboardMarkup([
                     [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")],

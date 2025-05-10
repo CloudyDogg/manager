@@ -177,42 +177,40 @@ async def add_user_to_chat(user_id, chat_id):
             
             try:
                 # Используем метод add_chat_members для добавления пользователя
-                await admin_client.add_chat_members(
-                    chat_id=target_chat.id,
-                    user_ids=user_id
-                )
-                
-                logger.info(f"Пользователь {user_id} успешно добавлен в чат")
-                
-                # Отправляем пользователю уведомление об успешном добавлении ТОЛЬКО ЕСЛИ ДОБАВЛЕНИЕ ПРОШЛО УСПЕШНО!
-                await bot.send_message(
-                    user_id,
-                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                    f"Можете открыть чат в своем приложении Telegram."
-                )
-                
-                # Обновляем статус заявки
-                session = get_session()
                 try:
-                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                    if join_request:
-                        join_request.status = "approved"
-                        session.commit()
-                except Exception as e:
-                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                finally:
-                    session.close()
-                
-                return True, "Пользователь успешно добавлен в чат"
-                
-            except Exception as e:
-                # Проверяем, является ли ошибка связанной с приватностью
-                if isinstance(e, UserPrivacyRestricted) or (hasattr(e, '__class__') and e.__class__.__name__ == 'UserPrivacyRestricted'):
-                    logger.warning(f"ОШИБКА ПРИВАТНОСТИ: {user_id} не может быть добавлен из-за настроек приватности")
-                    logger.warning(f"Детали ошибки: {str(e)}")
-                    logger.warning(f"Тип исключения: {type(e).__name__}")
+                    await admin_client.add_chat_members(
+                        chat_id=target_chat.id,
+                        user_ids=user_id
+                    )
                     
-                    # ВАЖНО: НЕ ОТПРАВЛЯЕМ сообщение об успешном добавлении, если произошла ошибка UserPrivacyRestricted
+                    logger.info(f"Пользователь {user_id} успешно добавлен в чат")
+                    
+                    # Отправляем пользователю уведомление об успешном добавлении ТОЛЬКО ЕСЛИ ДОБАВЛЕНИЕ ПРОШЛО УСПЕШНО!
+                    await bot.send_message(
+                        user_id,
+                        f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                        f"Можете открыть чат в своем приложении Telegram."
+                    )
+                    
+                    # Обновляем статус заявки
+                    session = get_session()
+                    try:
+                        join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                        if join_request:
+                            join_request.status = "approved"
+                            session.commit()
+                    except Exception as e:
+                        logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                    finally:
+                        session.close()
+                    
+                    return True, "Пользователь успешно добавлен в чат"
+                
+                # Специальная обработка ошибки приватности
+                except UserPrivacyRestricted as privacy_error:
+                    logger.warning(f"ОШИБКА ПРИВАТНОСТИ: {user_id} не может быть добавлен из-за настроек приватности")
+                    logger.warning(f"Детали ошибки: {str(privacy_error)}")
+                    logger.warning(f"Тип исключения: {type(privacy_error).__name__}")
                     
                     # Если не удалось добавить из-за настроек приватности, отправляем ссылку
                     chat_info = await admin_client.get_chat(target_chat.id)
@@ -280,6 +278,18 @@ async def add_user_to_chat(user_id, chat_id):
                     
                     # Возвращаем сообщение с явным указанием на проблему с приватностью
                     return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
+                
+                # Добавляем отдельную обработку любых других исключений при добавлении пользователя
+                except Exception as e:
+                    logger.error(f"Общая ошибка при добавлении пользователя: {type(e).__name__}: {str(e)}")
+                    
+                    # Проверяем, содержит ли сообщение об ошибке строку о приватности
+                    error_str = str(e).lower()
+                    if "privacy" in error_str or "приватности" in error_str or "restricted" in error_str:
+                        logger.warning(f"Обнаружена ошибка приватности из общего исключения: {str(e)}")
+                        return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
+                    else:
+                        return False, f"Не удалось добавить пользователя: {str(e)}"
             
         except UserAlreadyParticipant:
             logger.info(f"Пользователь {user_id} уже состоит в чате")
@@ -309,11 +319,14 @@ async def add_user_to_chat(user_id, chat_id):
             # Деактивируем текущий аккаунт администратора
             session = get_session()
             try:
-                admin_account = session.query(AdminAccount).filter_by(phone=admin_client._phone).first()
-                if admin_account:
-                    admin_account.active = False
-                    session.commit()
-                    logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за лимита добавлений")
+                if hasattr(admin_client, '_phone'):
+                    admin_account = session.query(AdminAccount).filter_by(phone=admin_client._phone).first()
+                    if admin_account:
+                        admin_account.active = False
+                        session.commit()
+                        logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за лимита добавлений")
+                else:
+                    logger.warning("Не удалось определить телефон аккаунта для деактивации")
             except Exception as e:
                 logger.error(f"Ошибка при деактивации аккаунта: {e}")
             finally:
@@ -453,7 +466,7 @@ async def select_chat_callback(client, callback_query):
                     
                     # Отправляем фото профиля, если оно доступно
                     try:
-                        user_photos = await client.get_user_profile_photos(user_id, limit=1)
+                        user_photos = await bot.get_user_profile_photos(user_id, limit=1)
                         if user_photos and user_photos.total_count > 0:
                             await client.send_photo(
                                 admin_id,

@@ -1737,3 +1737,13 @@ async def unblock_user_callback(client, callback_query):
         await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
     finally:
         session.close()
+
+@bot.on_callback_query()
+async def all_callback_handler(client, callback_query):
+    """
+    Глобальный обработчик для всех callback запросов для отладки
+    """
+    logger.info(f"ПОЛУЧЕН CALLBACK: {callback_query.data} от пользователя {callback_query.from_user.id}")
+    # Важно: не отправляем ответ и позволяем другим обработчикам продолжить работу
+    # await callback_query.answer("Отладка: получен коллбэк")
+    await callback_query.continue_propagation()

@@ -67,6 +67,41 @@ class JoinRequest(Base):
     status = Column(String, default="pending")  # pending, approved, rejected
     created_at = Column(DateTime, default=datetime.now)
     
+class Settings(Base):
+    __tablename__ = "settings"
+    
+    id = Column(Integer, primary_key=True)
+    key = Column(String, unique=True)
+    value = Column(String)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+def get_setting(key, default=None):
+    """Получить значение настройки по ключу"""
+    session = Session()
+    try:
+        setting = session.query(Settings).filter_by(key=key).first()
+        return setting.value if setting else default
+    finally:
+        session.close()
+
+def set_setting(key, value):
+    """Установить значение настройки"""
+    session = Session()
+    try:
+        setting = session.query(Settings).filter_by(key=key).first()
+        if setting:
+            setting.value = value
+        else:
+            setting = Settings(key=key, value=value)
+            session.add(setting)
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        return False
+    finally:
+        session.close()
+    
 def init_db():
     Base.metadata.create_all(engine)
     

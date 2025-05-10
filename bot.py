@@ -10,7 +10,7 @@ from pyrogram.raw import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood, InviteHashExpired
 from cryptography.fernet import Fernet
 import json
-from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key
+from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting
 
 # Настройка логирования
 logging.basicConfig(
@@ -519,6 +519,87 @@ async def select_chat_callback(client, callback_query):
                         await client.send_message(admin_id, admin_text)
                     except Exception as e:
                         logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
+            elif message == "auto_add_disabled":
+                # Если автодобавление отключено, оповещаем пользователя о ручной проверке
+                join_request.status = "manual_check"
+                session.commit()
+                
+                logger.info(f"Автодобавление отключено. Заявка пользователя {user_id} переведена в статус ручной проверки")
+                
+                # Информируем пользователя о ручной проверке
+                keyboard = types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
+                ])
+                await callback_query.edit_message_text(
+                    "⏳ Ваша заявка принята и будет рассмотрена администратором.\n\n"
+                    "📋 В данный момент включен режим ручного добавления пользователей.\n"
+                    "⌛ Вы будете добавлены после одобрения заявки администратором.",
+                    reply_markup=keyboard
+                )
+                
+                # Отправляем администраторам информацию о пользователе с кнопками для добавления
+                user_info = await client.get_users(user_id)
+                
+                # Собираем дополнительную информацию о пользователе
+                premium_status = "✅" if user_info.is_premium else "❌"
+                language_code = user_info.language_code or "неизвестно"
+                is_bot = "✅" if user_info.is_bot else "❌"
+                is_fake = "✅" if hasattr(user_info, "is_fake") and user_info.is_fake else "❌"
+                is_scam = "✅" if hasattr(user_info, "is_scam") and user_info.is_scam else "❌"
+                
+                admin_text = (
+                    f"📝 Новая заявка (ручное добавление):\n\n"
+                    f"👤 <b>Пользователь:</b>\n"
+                    f"ID: <code>{user_id}</code>\n"
+                    f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+                    f"Username: @{user_info.username or 'отсутствует'}\n\n"
+                    f"📊 <b>Дополнительная информация:</b>\n"
+                    f"Язык: {language_code}\n"
+                    f"Premium: {premium_status}\n"
+                    f"Бот: {is_bot}\n"
+                    f"Фейк: {is_fake}\n"
+                    f"Скам: {is_scam}\n\n"
+                    f"⏰ Дата заявки: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+                )
+                
+                # Создаем кнопки для добавления пользователя
+                chat_name = "Чат #1" if chat_id == CHAT_ID_1 else "Чат #2"
+                keyboard = types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton(f"✅ Добавить в {chat_name}", callback_data=f"manual_add_{user_id}_{chat_id}")],
+                    [types.InlineKeyboardButton("❌ Отклонить", callback_data=f"manual_reject_{user_id}_{chat_id}")]
+                ])
+                
+                # Отправляем уведомление всем администраторам
+                for admin_id in ADMIN_IDS:
+                    try:
+                        # Отправляем фото профиля, если оно есть
+                        try:
+                            profile_photos = await client.get_profile_photos(user_id, limit=1)
+                            if profile_photos.total_count > 0:
+                                await client.send_photo(
+                                    admin_id,
+                                    profile_photos.photos[0][0].file_id,
+                                    caption=admin_text,
+                                    reply_markup=keyboard,
+                                    parse_mode="HTML"
+                                )
+                            else:
+                                await client.send_message(
+                                    admin_id,
+                                    admin_text,
+                                    reply_markup=keyboard,
+                                    parse_mode="HTML"
+                                )
+                        except Exception as photo_err:
+                            logger.error(f"Ошибка при отправке фото профиля: {photo_err}")
+                            await client.send_message(
+                                admin_id,
+                                admin_text,
+                                reply_markup=keyboard,
+                                parse_mode="HTML"
+                            )
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
             else:
                 # Для других ошибок обновляем статус и показываем сообщение об ошибке
                 join_request.status = "rejected"
@@ -581,10 +662,16 @@ async def admin_command(client, message):
     admin_text = "🔧 Панель администратора:\n\n"
     admin_text += "Выберите действие:"
     
+    # Получаем текущий статус автодобавления
+    auto_add_enabled = get_setting("auto_add_enabled", "true").lower() == "true"
+    auto_add_button_text = "🔴 Отключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
+    auto_add_callback = "toggle_auto_add_off" if auto_add_enabled else "toggle_auto_add_on"
+    
     # Создаем инлайн-клавиатуру для админа
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
         [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+        [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
         [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
@@ -735,9 +822,15 @@ async def back_to_admin_callback(client, callback_query):
     """
     admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
     
+    # Получаем текущий статус автодобавления
+    auto_add_enabled = get_setting("auto_add_enabled", "true").lower() == "true"
+    auto_add_button_text = "🔴 Отключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
+    auto_add_callback = "toggle_auto_add_off" if auto_add_enabled else "toggle_auto_add_on"
+    
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
         [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+        [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
         [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
@@ -746,12 +839,103 @@ async def back_to_admin_callback(client, callback_query):
     
     await callback_query.edit_message_text(admin_text, reply_markup=keyboard)
 
+@bot.on_callback_query(filters.regex(r"^toggle_auto_add_on$"))
+async def toggle_auto_add_on_callback(client, callback_query):
+    """
+    Включение автоматического добавления пользователей
+    """
+    try:
+        # Устанавливаем флаг в значение true
+        set_setting("auto_add_enabled", "true")
+        logger.info(f"Администратор {callback_query.from_user.id} включил автоматическое добавление")
+        
+        # Уведомляем администратора
+        await callback_query.answer("✅ Автоматическое добавление пользователей включено")
+        
+        # Возвращаемся в панель администратора с обновленным статусом
+        admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
+        
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
+            [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+            [types.InlineKeyboardButton("🔴 Отключить автодобавление", callback_data="toggle_auto_add_off")],
+            [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
+            [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
+            [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
+            [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
+        ])
+        
+        await callback_query.edit_message_text(admin_text, reply_markup=keyboard)
+        
+        # Уведомляем других администраторов
+        actor = callback_query.from_user
+        notification = f"ℹ️ Администратор {actor.first_name} (@{actor.username or 'нет'}) включил автоматическое добавление пользователей."
+        
+        for admin_id in ADMIN_IDS:
+            if admin_id != callback_query.from_user.id:  # Не отправляем уведомление тому, кто включил
+                try:
+                    await client.send_message(admin_id, notification)
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
+    
+    except Exception as e:
+        logger.error(f"Ошибка при включении автодобавления: {e}")
+        await callback_query.answer("❌ Произошла ошибка при включении автодобавления")
+
+@bot.on_callback_query(filters.regex(r"^toggle_auto_add_off$"))
+async def toggle_auto_add_off_callback(client, callback_query):
+    """
+    Отключение автоматического добавления пользователей
+    """
+    try:
+        # Устанавливаем флаг в значение false
+        set_setting("auto_add_enabled", "false")
+        logger.info(f"Администратор {callback_query.from_user.id} отключил автоматическое добавление")
+        
+        # Уведомляем администратора
+        await callback_query.answer("✅ Автоматическое добавление пользователей отключено")
+        
+        # Возвращаемся в панель администратора с обновленным статусом
+        admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
+        
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
+            [types.InlineKeyboardButton("📝 Список заявок", callback_data="admin_requests")],
+            [types.InlineKeyboardButton("🟢 Включить автодобавление", callback_data="toggle_auto_add_on")],
+            [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
+            [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
+            [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
+            [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
+        ])
+        
+        await callback_query.edit_message_text(admin_text, reply_markup=keyboard)
+        
+        # Уведомляем других администраторов
+        actor = callback_query.from_user
+        notification = f"ℹ️ Администратор {actor.first_name} (@{actor.username or 'нет'}) отключил автоматическое добавление пользователей.\nПользователи будут добавляться только вручную через команду /admin."
+        
+        for admin_id in ADMIN_IDS:
+            if admin_id != callback_query.from_user.id:  # Не отправляем уведомление тому, кто отключил
+                try:
+                    await client.send_message(admin_id, notification)
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
+    
+    except Exception as e:
+        logger.error(f"Ошибка при отключении автодобавления: {e}")
+        await callback_query.answer("❌ Произошла ошибка при отключении автодобавления")
+
 async def startup():
     """
     Функция запуска
     """
     # Инициализация базы данных
     init_db()
+    
+    # Инициализация настроек
+    if get_setting("auto_add_enabled") is None:
+        logger.info("Инициализация настройки auto_add_enabled со значением true")
+        set_setting("auto_add_enabled", "true")
     
     # Запуск бота
     await bot.start()
@@ -782,6 +966,162 @@ if __name__ == "__main__":
         loop.run_until_complete(shutdown())
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
+
+# Обработчики для ручного добавления и отклонения заявок
+@bot.on_callback_query(filters.regex(r"^manual_add_(\d+)_(-?\d+)$"))
+async def manual_add_callback(client, callback_query):
+    """
+    Ручное добавление пользователя администратором
+    """
+    try:
+        # Извлекаем ID пользователя и чата из callback_data
+        user_id = int(callback_query.data.split("_")[2])
+        chat_id = int(callback_query.data.split("_")[3])
+        
+        # Сообщаем администратору, что начинаем процесс добавления
+        await callback_query.answer("Начинаем процесс добавления пользователя...")
+        
+        # Временно включаем автодобавление для этой операции
+        current_auto_add = get_setting("auto_add_enabled", "true")
+        set_setting("auto_add_enabled", "true")
+        
+        # Вызываем функцию добавления пользователя
+        success, message = await add_user_to_chat(user_id, chat_id)
+        
+        # Восстанавливаем предыдущее значение настройки
+        set_setting("auto_add_enabled", current_auto_add)
+        
+        if success:
+            # Обновляем сообщение администратора
+            user_info = await client.get_users(user_id)
+            admin_text = (
+                f"✅ Пользователь успешно добавлен:\n\n"
+                f"ID: {user_id}\n"
+                f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+                f"Username: @{user_info.username or 'отсутствует'}\n\n"
+                f"Чат: {'Чат #1' if chat_id == CHAT_ID_1 else 'Чат #2'}\n"
+                f"Добавлен вручную администратором: {callback_query.from_user.first_name}\n"
+                f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            )
+            await callback_query.edit_message_caption(caption=admin_text)
+            
+            # Обновляем статус заявки
+            session = get_session()
+            try:
+                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="manual_check").first()
+                if join_request:
+                    join_request.status = "approved"
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+            finally:
+                session.close()
+                
+            # Уведомляем других администраторов
+            notification = (
+                f"✅ Администратор {callback_query.from_user.first_name} (@{callback_query.from_user.username or 'нет'}) "
+                f"вручную добавил пользователя {user_info.first_name} {user_info.last_name or ''} (@{user_info.username or 'нет'}) в чат."
+            )
+            
+            for admin_id in ADMIN_IDS:
+                if admin_id != callback_query.from_user.id:  # Не отправляем уведомление тому, кто добавил
+                    try:
+                        await client.send_message(admin_id, notification)
+                    except Exception as e:
+                        logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
+        else:
+            # Если не удалось добавить, сообщаем об ошибке
+            error_text = (
+                f"❌ Не удалось добавить пользователя:\n\n"
+                f"ID: {user_id}\n"
+                f"Ошибка: {message}\n"
+                f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            )
+            await callback_query.edit_message_caption(caption=error_text)
+            
+            # Обновляем статус заявки в зависимости от ошибки
+            session = get_session()
+            try:
+                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="manual_check").first()
+                if join_request:
+                    if "приватности" in message.lower() or "privacy" in message.lower() or "UserPrivacyRestricted" in message:
+                        join_request.status = "link_sent"
+                    else:
+                        join_request.status = "rejected"
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+            finally:
+                session.close()
+                
+    except Exception as e:
+        logger.error(f"Ошибка при ручном добавлении пользователя: {e}")
+        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+
+@bot.on_callback_query(filters.regex(r"^manual_reject_(\d+)_(-?\d+)$"))
+async def manual_reject_callback(client, callback_query):
+    """
+    Отклонение заявки на добавление пользователя
+    """
+    try:
+        # Извлекаем ID пользователя и чата из callback_data
+        user_id = int(callback_query.data.split("_")[2])
+        chat_id = int(callback_query.data.split("_")[3])
+        
+        # Сообщаем администратору, что заявка отклонена
+        await callback_query.answer("Заявка отклонена")
+        
+        # Обновляем статус заявки
+        session = get_session()
+        try:
+            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="manual_check").first()
+            if join_request:
+                join_request.status = "rejected"
+                session.commit()
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+        finally:
+            session.close()
+            
+        # Обновляем сообщение администратора
+        user_info = await client.get_users(user_id)
+        admin_text = (
+            f"❌ Заявка отклонена:\n\n"
+            f"ID: {user_id}\n"
+            f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+            f"Username: @{user_info.username or 'отсутствует'}\n\n"
+            f"Чат: {'Чат #1' if chat_id == CHAT_ID_1 else 'Чат #2'}\n"
+            f"Отклонено администратором: {callback_query.from_user.first_name}\n"
+            f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+        await callback_query.edit_message_caption(caption=admin_text)
+        
+        # Уведомляем пользователя
+        try:
+            await client.send_message(
+                user_id,
+                "❌ К сожалению, ваша заявка на вступление в чат была отклонена администратором.\n\n"
+                "Если у вас есть вопросы, вы можете связаться с поддержкой."
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при отправке уведомления пользователю {user_id}: {e}")
+            
+        # Уведомляем других администраторов
+        notification = (
+            f"❌ Администратор {callback_query.from_user.first_name} (@{callback_query.from_user.username or 'нет'}) "
+            f"отклонил заявку пользователя {user_info.first_name} {user_info.last_name or ''} (@{user_info.username or 'нет'})."
+        )
+        
+        for admin_id in ADMIN_IDS:
+            if admin_id != callback_query.from_user.id:  # Не отправляем уведомление тому, кто отклонил
+                try:
+                    await client.send_message(admin_id, notification)
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке уведомления администратору {admin_id}: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Ошибка при отклонении заявки: {e}")
+        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
 
 # Оставляем обработчики команд для блокировки и разблокировки пользователей
 @bot.on_message(filters.command("block") & filters.private & filters.user(ADMIN_IDS))

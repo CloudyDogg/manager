@@ -20,118 +20,48 @@ dp = Dispatcher(storage=storage)
 
 # Определение состояний для FSM (конечного автомата)
 class UserStates(StatesGroup):
-    selecting_chat = State()
-    confirming_join = State()
-    changing_privacy = State()
-    feedback = State()  # Новое состояние для обратной связи
+    selecting_chat = State()  # Выбор чата
+    confirming_join = State() # Подтверждение вступления
+    changing_privacy = State() # Изменение настроек приватности
+    feedback = State()  # Обратная связь
 
 # Функции для создания клавиатур
 def get_start_keyboard():
     """Создает клавиатуру для начального меню"""
-    # Создаем кнопки
-    select_chat_btn = InlineKeyboardButton(text="Хочу в чат 🔐", callback_data="select_chat")
-    info_btn = InlineKeyboardButton(text=MESSAGES["info_button"], callback_data="info")
-    support_btn = InlineKeyboardButton(text=MESSAGES["support_button"], callback_data="support")
-    
-    # Создаем клавиатуру с нужной структурой
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [select_chat_btn],  # Первая строка с одной кнопкой
-        [info_btn, support_btn]  # Вторая строка с двумя кнопками
+        [InlineKeyboardButton(text="Хочу в чат 🔐", callback_data="select_chat")],
+        [
+            InlineKeyboardButton(text=MESSAGES["info_button"], callback_data="info"),
+            InlineKeyboardButton(text=MESSAGES["support_button"], callback_data="support")
+        ]
     ])
-    
     return keyboard
 
 def get_chat_selection_keyboard():
     """Создает клавиатуру для выбора чата"""
-    # Создаем кнопки
-    chat1_btn = InlineKeyboardButton(
-        text=CHATS[CHAT_ID_1]["name"],
-        callback_data=f"join_chat:{CHAT_ID_1}"
-    )
-    
-    chat2_btn = InlineKeyboardButton(
-        text=CHATS[CHAT_ID_2]["name"],
-        callback_data=f"join_chat:{CHAT_ID_2}"
-    )
-    
-    back_btn = InlineKeyboardButton(
-        text=MESSAGES["back_button"],
-        callback_data="back_to_start"
-    )
-    
-    # Создаем клавиатуру с нужной структурой
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [chat1_btn],  # Первая строка
-        [chat2_btn],  # Вторая строка
-        [back_btn]    # Третья строка
+        [InlineKeyboardButton(text=CHATS[CHAT_ID_1]["name"], callback_data=f"join_chat:{CHAT_ID_1}")],
+        [InlineKeyboardButton(text=CHATS[CHAT_ID_2]["name"], callback_data=f"join_chat:{CHAT_ID_2}")],
+        [InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="back_to_start")]
     ])
-    
     return keyboard
 
 def get_confirm_join_keyboard(chat_id):
     """Создает клавиатуру для подтверждения вступления в чат"""
-    # Создаем кнопки
-    join_btn = InlineKeyboardButton(
-        text=MESSAGES["join_button"],
-        callback_data=f"confirm_join:{chat_id}"
-    )
-    
-    back_btn = InlineKeyboardButton(
-        text=MESSAGES["back_button"],
-        callback_data="select_chat"
-    )
-    
-    # Создаем клавиатуру с нужной структурой
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [join_btn],  # Первая строка
-        [back_btn]   # Вторая строка
+        [InlineKeyboardButton(text=MESSAGES["join_button"], callback_data=f"confirm_join:{chat_id}")],
+        [InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="select_chat")]
     ])
-    
     return keyboard
 
 def get_privacy_issue_keyboard():
     """Создает клавиатуру для случая, когда есть проблемы с приватностью"""
-    # Создаем кнопки
-    instructions_btn = InlineKeyboardButton(
-        text="Показать инструкцию 📋",
-        callback_data="show_privacy_instructions"
-    )
-    
-    try_again_btn = InlineKeyboardButton(
-        text="Попробовать снова 🔄",
-        callback_data="try_again"
-    )
-    
-    contact_admin_btn = InlineKeyboardButton(
-        text="Связаться с админом 👨‍💼",
-        callback_data="contact_admin"
-    )
-    
-    back_btn = InlineKeyboardButton(
-        text=MESSAGES["back_button"],
-        callback_data="select_chat"
-    )
-    
-    # Создаем клавиатуру с нужной структурой
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [instructions_btn],  # Первая строка
-        [try_again_btn],     # Вторая строка
-        [contact_admin_btn], # Третья строка
-        [back_btn]           # Четвертая строка
+        [InlineKeyboardButton(text="Показать инструкцию 📋", callback_data="show_privacy_instructions")],
+        [InlineKeyboardButton(text="Попробовать снова 🔄", callback_data="try_again")],
+        [InlineKeyboardButton(text="Связаться с админом 👨‍💼", callback_data="contact_admin")],
+        [InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="select_chat")]
     ])
-    
-    return keyboard
-
-def get_feedback_keyboard():
-    """Создает клавиатуру для сбора обратной связи"""
-    back_btn = InlineKeyboardButton(
-        text=MESSAGES["back_button"],
-        callback_data="back_to_start"
-    )
-    
-    # Создаем клавиатуру с одной кнопкой назад
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[back_btn]])
-    
     return keyboard
 
 # Вспомогательные функции
@@ -144,14 +74,11 @@ def get_admin_contact_info():
         "phone": "+7 (XXX) XXX-XX-XX"
     }
 
-def notify_admins(message, user_id=None, chat_id=None):
+async def notify_admins(message, user_id=None, chat_id=None):
     """Отправляет уведомление всем администраторам"""
     for admin_id in ADMIN_IDS:
         try:
-            bot.send_message(
-                chat_id=admin_id,
-                text=message
-            )
+            await bot.send_message(chat_id=admin_id, text=message)
             logger.info(f"Уведомление отправлено админу {admin_id}")
         except Exception as e:
             logger.error(f"Ошибка при отправке уведомления админу {admin_id}: {e}")
@@ -200,281 +127,337 @@ async def cmd_admin_forward(message: types.Message, state: FSMContext):
         logger.warning(f"Отказано в доступе к админке пользователю {message.from_user.id}")
         await message.answer("У вас нет доступа к администраторским функциям. Если вы считаете, что это ошибка, свяжитесь с владельцем бота.")
 
-# Обработчики нажатий на кнопки
-@dp.callback_query(lambda c: c.data == "select_chat")
-async def process_select_chat(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик кнопки выбора чата"""
-    # Устанавливаем состояние выбора чата
-    await state.set_state(UserStates.selecting_chat)
+# Обработчики колбэков (обрабатывают все колбэки с единой точкой входа)
+@dp.callback_query()
+async def process_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    """Единый обработчик всех callback_query"""
+    # Получаем callback_data
+    callback_data = callback_query.data
+    current_state = await state.get_state()
     
-    # Отправляем сообщение с кнопками выбора чата
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=MESSAGES["select_chat"],
-        reply_markup=get_chat_selection_keyboard()
-    )
+    logger.info(f"Получен callback: {callback_data}, текущее состояние: {current_state}")
     
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-@dp.callback_query(lambda c: c.data.startswith("join_chat:"))
-async def process_join_chat(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик выбора конкретного чата"""
-    # Получаем ID чата из callback data
-    chat_id = int(callback_query.data.split(":")[1])
-    
-    # Получаем информацию о чате
-    chat_info = await chat_manager.get_chat_info(chat_id)
-    
-    # Сохраняем выбранный чат в состоянии
-    await state.update_data(selected_chat_id=chat_id)
-    
-    # Устанавливаем состояние подтверждения вступления
-    await state.set_state(UserStates.confirming_join)
-    
-    # Отправляем сообщение с подтверждением
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=MESSAGES["confirm_join"].format(chat_name=chat_info["name"]),
-        reply_markup=get_confirm_join_keyboard(chat_id)
-    )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-@dp.callback_query(lambda c: c.data.startswith("confirm_join:"))
-async def process_confirm_join(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик подтверждения вступления в чат"""
-    # Получаем данные из состояния
-    data = await state.get_data()
-    chat_id = int(callback_query.data.split(":")[1])
-    
-    # Проверяем, может ли пользователь быть добавлен
-    can_be_added, reason = await chat_manager.check_user_can_be_added(
-        user_id=callback_query.from_user.id,
-        chat_id=chat_id
-    )
-    
-    if not can_be_added:
-        # Если пользователь не может быть добавлен
-        await bot.edit_message_text(
-            chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
-            text=f"К сожалению, вы не можете быть добавлены в чат: {reason}",
-            reply_markup=get_chat_selection_keyboard()
-        )
-        await callback_query.answer()
-        return
-    
-    # Пытаемся добавить пользователя в чат
-    success, message, additional_data = await chat_manager.add_user_to_chat(
-        user_id=callback_query.from_user.id,
-        chat_id=chat_id
-    )
-    
-    if success:
-        # Если пользователь успешно добавлен
-        # Получаем информацию о чате
-        chat_info = await chat_manager.get_chat_info(chat_id)
-        
-        # Отправляем сообщение об успешном добавлении
-        await bot.edit_message_text(
-            chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
-            text=chat_info["welcome_message"] or MESSAGES["success_join"],
-            reply_markup=None
-        )
-        
-        # Отправляем уведомление админам
-        if additional_data and "admin_username" in additional_data:
-            admin_username = additional_data["admin_username"]
-            
-            # Отправляем уведомление всем админам
-            user_name = callback_query.from_user.username or f"id{callback_query.from_user.id}"
-            notify_message = MESSAGES["admin_notification"].format(
-                username=user_name,
-                chat_name=chat_info["name"],
-                admin_username=admin_username
-            )
-            await notify_admins(notify_message, callback_query.from_user.id, chat_id)
-    else:
-        # Если возникла ошибка при добавлении
-        if additional_data and additional_data.get("privacy_restricted"):
-            # Если проблема с настройками приватности
-            await state.set_state(UserStates.changing_privacy)
-            
-            # Отправляем сообщение с инструкцией
+    try:
+        # Маршрутизация на основе callback_data
+        if callback_data == "select_chat":
+            # Выбор чата
+            await state.set_state(UserStates.selecting_chat)
             await bot.edit_message_text(
                 chat_id=callback_query.message.chat.id,
                 message_id=callback_query.message.message_id,
-                text=MESSAGES["privacy_issue"],
-                reply_markup=get_privacy_issue_keyboard()
-            )
-        else:
-            # Если другая ошибка
-            await bot.edit_message_text(
-                chat_id=callback_query.message.chat.id,
-                message_id=callback_query.message.message_id,
-                text=f"Ошибка при добавлении в чат: {message}",
+                text=MESSAGES["select_chat"],
                 reply_markup=get_chat_selection_keyboard()
             )
-            
-            # Логируем ошибку
-            logger.error(f"Ошибка при добавлении пользователя {callback_query.from_user.id} в чат {chat_id}: {message}")
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-@dp.callback_query(lambda c: c.data == "show_privacy_instructions")
-async def process_show_privacy_instructions(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик показа инструкции по изменению настроек приватности"""
-    # Отправляем первую инструкцию
-    for i, instruction in enumerate(PRIVACY_INSTRUCTIONS):
-        # Отправляем текст инструкции
-        if i == 0:
-            # Редактируем текущее сообщение для первой инструкции
+        
+        elif callback_data.startswith("join_chat:"):
+            # Выбран конкретный чат
+            # Получаем ID чата из callback data
+            chat_id = int(callback_data.split(":")[1])
+            # Получаем информацию о чате
+            chat_info = await chat_manager.get_chat_info(chat_id)
+            # Сохраняем выбранный чат в состоянии
+            await state.update_data(selected_chat_id=chat_id)
+            # Устанавливаем состояние подтверждения вступления
+            await state.set_state(UserStates.confirming_join)
+            # Отправляем сообщение с подтверждением
             await bot.edit_message_text(
                 chat_id=callback_query.message.chat.id,
                 message_id=callback_query.message.message_id,
-                text=instruction["text"],
-                reply_markup=None
+                text=MESSAGES["confirm_join"].format(chat_name=chat_info["name"]),
+                reply_markup=get_confirm_join_keyboard(chat_id)
             )
-        else:
-            # Отправляем новые сообщения для остальных инструкций
+        
+        elif callback_data.startswith("confirm_join:"):
+            # Подтверждение вступления в чат
+            # Получаем ID чата из callback data
+            chat_id = int(callback_data.split(":")[1])
+            # Проверяем, может ли пользователь быть добавлен
+            can_be_added, reason = await chat_manager.check_user_can_be_added(
+                user_id=callback_query.from_user.id,
+                chat_id=chat_id
+            )
+            
+            if not can_be_added:
+                # Если пользователь не может быть добавлен
+                await bot.edit_message_text(
+                    chat_id=callback_query.message.chat.id,
+                    message_id=callback_query.message.message_id,
+                    text=f"К сожалению, вы не можете быть добавлены в чат: {reason}",
+                    reply_markup=get_chat_selection_keyboard()
+                )
+            else:
+                # Пытаемся добавить пользователя в чат
+                success, message, additional_data = await chat_manager.add_user_to_chat(
+                    user_id=callback_query.from_user.id,
+                    chat_id=chat_id
+                )
+                
+                if success:
+                    # Если пользователь успешно добавлен
+                    # Получаем информацию о чате
+                    chat_info = await chat_manager.get_chat_info(chat_id)
+                    # Отправляем сообщение об успешном добавлении
+                    await bot.edit_message_text(
+                        chat_id=callback_query.message.chat.id,
+                        message_id=callback_query.message.message_id,
+                        text=chat_info["welcome_message"] or MESSAGES["success_join"],
+                        reply_markup=None
+                    )
+                    
+                    # Отправляем уведомление админам
+                    if additional_data and "admin_username" in additional_data:
+                        admin_username = additional_data["admin_username"]
+                        user_name = callback_query.from_user.username or f"id{callback_query.from_user.id}"
+                        notify_message = MESSAGES["admin_notification"].format(
+                            username=user_name,
+                            chat_name=chat_info["name"],
+                            admin_username=admin_username
+                        )
+                        await notify_admins(notify_message, callback_query.from_user.id, chat_id)
+                else:
+                    # Если возникла ошибка при добавлении
+                    if additional_data and additional_data.get("privacy_restricted"):
+                        # Если проблема с настройками приватности
+                        await state.set_state(UserStates.changing_privacy)
+                        # Отправляем сообщение с инструкцией
+                        await bot.edit_message_text(
+                            chat_id=callback_query.message.chat.id,
+                            message_id=callback_query.message.message_id,
+                            text=MESSAGES["privacy_issue"],
+                            reply_markup=get_privacy_issue_keyboard()
+                        )
+                    else:
+                        # Если другая ошибка
+                        await bot.edit_message_text(
+                            chat_id=callback_query.message.chat.id,
+                            message_id=callback_query.message.message_id,
+                            text=f"Ошибка при добавлении в чат: {message}",
+                            reply_markup=get_chat_selection_keyboard()
+                        )
+                        
+                        # Логируем ошибку
+                        logger.error(f"Ошибка при добавлении пользователя {callback_query.from_user.id} в чат {chat_id}: {message}")
+        
+        elif callback_data == "show_privacy_instructions":
+            # Показ инструкции по изменению настроек приватности
+            for i, instruction in enumerate(PRIVACY_INSTRUCTIONS):
+                # Отправляем текст инструкции
+                if i == 0:
+                    # Редактируем текущее сообщение для первой инструкции
+                    await bot.edit_message_text(
+                        chat_id=callback_query.message.chat.id,
+                        message_id=callback_query.message.message_id,
+                        text=instruction["text"],
+                        reply_markup=None
+                    )
+                else:
+                    # Отправляем новые сообщения для остальных инструкций
+                    await bot.send_message(
+                        chat_id=callback_query.message.chat.id,
+                        text=instruction["text"]
+                    )
+                
+                # Отправляем изображение, если оно есть
+                if "image" in instruction and instruction["image"]:
+                    try:
+                        with open(instruction["image"], "rb") as photo:
+                            await bot.send_photo(
+                                chat_id=callback_query.message.chat.id,
+                                photo=photo
+                            )
+                    except Exception as e:
+                        logger.error(f"Ошибка при отправке изображения {instruction['image']}: {e}")
+                        await bot.send_message(
+                            chat_id=callback_query.message.chat.id,
+                            text="Не удалось загрузить изображение с инструкцией"
+                        )
+            
+            # Отправляем сообщение с кнопкой "Попробовать снова"
             await bot.send_message(
                 chat_id=callback_query.message.chat.id,
-                text=instruction["text"]
-            )
-        
-        # Отправляем изображение, если оно есть
-        if "image" in instruction and instruction["image"]:
-            try:
-                with open(instruction["image"], "rb") as photo:
-                    await bot.send_photo(
-                        chat_id=callback_query.message.chat.id,
-                        photo=photo
-                    )
-            except Exception as e:
-                logger.error(f"Ошибка при отправке изображения {instruction['image']}: {e}")
-                await bot.send_message(
-                    chat_id=callback_query.message.chat.id,
-                    text="Не удалось загрузить изображение с инструкцией"
-                )
-    
-    # Отправляем сообщение с кнопкой "Попробовать снова"
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text="После изменения настроек, попробуйте снова:",
-        reply_markup=get_privacy_issue_keyboard()
-    )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-@dp.callback_query(lambda c: c.data == "try_again")
-async def process_try_again(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик повторной попытки добавления после изменения настроек приватности"""
-    # Получаем данные из состояния
-    data = await state.get_data()
-    chat_id = data.get("selected_chat_id")
-    
-    if not chat_id:
-        # Если чат не выбран, возвращаем к выбору чата
-        await state.set_state(UserStates.selecting_chat)
-        await bot.edit_message_text(
-            chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
-            text=MESSAGES["select_chat"],
-            reply_markup=get_chat_selection_keyboard()
-        )
-        await callback_query.answer()
-        return
-    
-    # Пытаемся добавить пользователя в чат
-    success, message, additional_data = await chat_manager.add_user_to_chat(
-        user_id=callback_query.from_user.id,
-        chat_id=chat_id
-    )
-    
-    if success:
-        # Если пользователь успешно добавлен
-        # Получаем информацию о чате
-        chat_info = await chat_manager.get_chat_info(chat_id)
-        
-        # Отправляем сообщение об успешном добавлении
-        await bot.edit_message_text(
-            chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
-            text=chat_info["welcome_message"] or MESSAGES["success_join"],
-            reply_markup=None
-        )
-        
-        # Отправляем уведомление админам
-        if additional_data and "admin_username" in additional_data:
-            admin_username = additional_data["admin_username"]
-            
-            # Отправляем уведомление всем админам
-            user_name = callback_query.from_user.username or f"id{callback_query.from_user.id}"
-            notify_message = MESSAGES["admin_notification"].format(
-                username=user_name,
-                chat_name=chat_info["name"],
-                admin_username=admin_username
-            )
-            await notify_admins(notify_message, callback_query.from_user.id, chat_id)
-    else:
-        # Если все еще есть проблемы с добавлением
-        if additional_data and additional_data.get("privacy_restricted"):
-            # Если проблема с настройками приватности
-            await bot.edit_message_text(
-                chat_id=callback_query.message.chat.id,
-                message_id=callback_query.message.message_id,
-                text="К сожалению, проблема с настройками приватности все еще существует. "
-                     "Убедитесь, что вы правильно изменили настройки, или свяжитесь с админом.",
+                text="После изменения настроек, попробуйте снова:",
                 reply_markup=get_privacy_issue_keyboard()
             )
-        else:
-            # Если другая ошибка
+        
+        elif callback_data == "try_again":
+            # Повторная попытка добавления после изменения настроек приватности
+            # Получаем данные из состояния
+            data = await state.get_data()
+            chat_id = data.get("selected_chat_id")
+            
+            if not chat_id:
+                # Если чат не выбран, возвращаем к выбору чата
+                await state.set_state(UserStates.selecting_chat)
+                await bot.edit_message_text(
+                    chat_id=callback_query.message.chat.id,
+                    message_id=callback_query.message.message_id,
+                    text=MESSAGES["select_chat"],
+                    reply_markup=get_chat_selection_keyboard()
+                )
+                return
+            
+            # Пытаемся добавить пользователя в чат
+            success, message, additional_data = await chat_manager.add_user_to_chat(
+                user_id=callback_query.from_user.id,
+                chat_id=chat_id
+            )
+            
+            if success:
+                # Если пользователь успешно добавлен
+                # Получаем информацию о чате
+                chat_info = await chat_manager.get_chat_info(chat_id)
+                # Отправляем сообщение об успешном добавлении
+                await bot.edit_message_text(
+                    chat_id=callback_query.message.chat.id,
+                    message_id=callback_query.message.message_id,
+                    text=chat_info["welcome_message"] or MESSAGES["success_join"],
+                    reply_markup=None
+                )
+                
+                # Отправляем уведомление админам
+                if additional_data and "admin_username" in additional_data:
+                    admin_username = additional_data["admin_username"]
+                    user_name = callback_query.from_user.username or f"id{callback_query.from_user.id}"
+                    notify_message = MESSAGES["admin_notification"].format(
+                        username=user_name,
+                        chat_name=chat_info["name"],
+                        admin_username=admin_username
+                    )
+                    await notify_admins(notify_message, callback_query.from_user.id, chat_id)
+            else:
+                # Если все еще есть проблемы с добавлением
+                if additional_data and additional_data.get("privacy_restricted"):
+                    # Если проблема с настройками приватности
+                    await bot.edit_message_text(
+                        chat_id=callback_query.message.chat.id,
+                        message_id=callback_query.message.message_id,
+                        text="К сожалению, проблема с настройками приватности все еще существует. "
+                             "Убедитесь, что вы правильно изменили настройки, или свяжитесь с админом.",
+                        reply_markup=get_privacy_issue_keyboard()
+                    )
+                else:
+                    # Если другая ошибка
+                    await bot.edit_message_text(
+                        chat_id=callback_query.message.chat.id,
+                        message_id=callback_query.message.message_id,
+                        text=f"Ошибка при добавлении в чат: {message}",
+                        reply_markup=get_chat_selection_keyboard()
+                    )
+        
+        elif callback_data == "contact_admin":
+            # Запрос связи с админом
+            # Получаем контактную информацию администратора
+            admin_info = get_admin_contact_info()
+            # Формируем текст сообщения
+            contact_text = (
+                "Для связи с администратором, используйте один из способов:\n\n"
+                f"• Telegram: @{admin_info['username']}\n"
+                f"• Email: {admin_info['email']}\n"
+                f"• Телефон: {admin_info['phone']}\n\n"
+                "Или оставьте сообщение прямо здесь, отправив его в ответ на это сообщение."
+            )
+            # Отправляем сообщение
             await bot.edit_message_text(
                 chat_id=callback_query.message.chat.id,
                 message_id=callback_query.message.message_id,
-                text=f"Ошибка при добавлении в чат: {message}",
-                reply_markup=get_chat_selection_keyboard()
+                text=contact_text,
+                reply_markup=get_privacy_issue_keyboard()
+            )
+            # Устанавливаем состояние для обратной связи
+            await state.set_state(UserStates.feedback)
+        
+        elif callback_data == "back_to_start":
+            # Возврат в начальное меню
+            # Сбрасываем состояние
+            await state.clear()
+            # Отправляем начальное меню
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text=MESSAGES["welcome"],
+                reply_markup=get_start_keyboard()
+            )
+        
+        elif callback_data == "info":
+            # Показ информации о чатах
+            # Отправляем информацию о боте и чатах
+            info_text = (
+                "ℹ️ Информация о чатах:\n\n"
+                f"1. {CHATS[CHAT_ID_1]['name']}\n"
+                f"{CHATS[CHAT_ID_1]['description']}\n\n"
+                f"2. {CHATS[CHAT_ID_2]['name']}\n"
+                f"{CHATS[CHAT_ID_2]['description']}\n\n"
+                "Для вступления в один из чатов используйте кнопку 'Хочу в чат' в главном меню."
+            )
+            back_btn = InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="back_to_start")
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text=info_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_btn]])
+            )
+        
+        elif callback_data == "support":
+            # Показ информации о поддержке
+            # Получаем контактную информацию администратора
+            admin_info = get_admin_contact_info()
+            # Отправляем информацию о поддержке
+            support_text = (
+                "🆘 Поддержка\n\n"
+                "Если у вас возникли проблемы или вопросы, вы можете:\n"
+                f"• Написать администратору: @{admin_info['username']}\n"
+                f"• Отправить письмо: {admin_info['email']}\n\n"
+                "Спасибо за использование нашего бота!"
+            )
+            back_btn = InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="back_to_start")
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text=support_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_btn]])
+            )
+        
+        else:
+            # Неизвестная команда
+            logger.warning(f"Получен неизвестный callback_data: {callback_data}")
+            await callback_query.answer("Неизвестная команда или устаревшая кнопка")
+            
+            # Возвращаем в начальное меню, если колбэк не обработан
+            # Сбрасываем состояние
+            await state.clear()
+            # Отправляем начальное меню
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text=MESSAGES["welcome"],
+                reply_markup=get_start_keyboard()
             )
     
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-@dp.callback_query(lambda c: c.data == "contact_admin")
-async def process_contact_admin(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик запроса связи с админом"""
-    # Получаем контактную информацию администратора
-    admin_info = get_admin_contact_info()
-    
-    # Формируем текст сообщения
-    contact_text = (
-        "Для связи с администратором, используйте один из способов:\n\n"
-        f"• Telegram: @{admin_info['username']}\n"
-        f"• Email: {admin_info['email']}\n"
-        f"• Телефон: {admin_info['phone']}\n\n"
-        "Или оставьте сообщение прямо здесь, отправив его в ответ на это сообщение."
-    )
-    
-    # Отправляем сообщение
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=contact_text,
-        reply_markup=get_privacy_issue_keyboard()
-    )
-    
-    # Устанавливаем состояние для обратной связи
-    await state.set_state(UserStates.feedback)
+    except Exception as e:
+        # Логируем ошибку
+        logger.error(f"Ошибка при обработке callback_query {callback_data}: {e}")
+        # Отвечаем на callback query
+        await callback_query.answer("Произошла ошибка при обработке запроса")
+        
+        try:
+            # Пытаемся вернуть в начальное меню
+            await state.clear()
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text=MESSAGES["welcome"],
+                reply_markup=get_start_keyboard()
+            )
+        except Exception:
+            pass
     
     # Отвечаем на callback query
-    await callback_query.answer()
+    try:
+        await callback_query.answer()
+    except Exception:
+        pass
 
+# Обработчик сообщений обратной связи
 @dp.message(UserStates.feedback)
 async def process_feedback(message: types.Message, state: FSMContext):
     """Обработчик сообщений обратной связи"""
@@ -503,81 +486,6 @@ async def process_feedback(message: types.Message, state: FSMContext):
         MESSAGES["welcome"],
         reply_markup=get_start_keyboard()
     )
-
-@dp.callback_query(lambda c: c.data == "back_to_start")
-async def process_back_to_start(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик возврата в начальное меню"""
-    # Сбрасываем состояние
-    await state.clear()
-    
-    # Отправляем начальное меню
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=MESSAGES["welcome"],
-        reply_markup=get_start_keyboard()
-    )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-@dp.callback_query(lambda c: c.data == "info")
-async def process_info(callback_query: types.CallbackQuery):
-    """Обработчик кнопки информации"""
-    # Отправляем информацию о боте и чатах
-    info_text = (
-        "ℹ️ Информация о чатах:\n\n"
-        f"1. {CHATS[CHAT_ID_1]['name']}\n"
-        f"{CHATS[CHAT_ID_1]['description']}\n\n"
-        f"2. {CHATS[CHAT_ID_2]['name']}\n"
-        f"{CHATS[CHAT_ID_2]['description']}\n\n"
-        "Для вступления в один из чатов используйте кнопку 'Хочу в чат' в главном меню."
-    )
-    
-    back_btn = InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="back_to_start")
-    
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=info_text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_btn]])
-    )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-@dp.callback_query(lambda c: c.data == "support")
-async def process_support(callback_query: types.CallbackQuery):
-    """Обработчик кнопки поддержки"""
-    # Получаем контактную информацию администратора
-    admin_info = get_admin_contact_info()
-    
-    # Отправляем информацию о поддержке
-    support_text = (
-        "🆘 Поддержка\n\n"
-        "Если у вас возникли проблемы или вопросы, вы можете:\n"
-        f"• Написать администратору: @{admin_info['username']}\n"
-        f"• Отправить письмо: {admin_info['email']}\n\n"
-        "Спасибо за использование нашего бота!"
-    )
-    
-    back_btn = InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="back_to_start")
-    
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=support_text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_btn]])
-    )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
-
-# Обработчик неизвестных callback_query
-@dp.callback_query()
-async def process_unknown_callback(callback_query: types.CallbackQuery):
-    """Обработчик всех остальных callback_query"""
-    await callback_query.answer("Неизвестная команда или устаревшая кнопка")
 
 # Обработчик всех остальных сообщений
 @dp.message()

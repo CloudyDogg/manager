@@ -137,6 +137,11 @@ async def process_callback(callback_query: types.CallbackQuery, state: FSMContex
     
     logger.info(f"Получен callback: {callback_data}, текущее состояние: {current_state}")
     
+    # Пропускаем админские колбэки, их обрабатывает admin_interface.py
+    if callback_data.startswith("admin:"):
+        logger.info(f"Пропускаем админский callback: {callback_data}")
+        return
+    
     try:
         # Маршрутизация на основе callback_data
         if callback_data == "select_chat":

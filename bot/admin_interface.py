@@ -409,63 +409,82 @@ async def process_admin_callback(callback_query: types.CallbackQuery, state: FSM
     
     logger.info(f"Получен админский callback: {callback_data}, текущее состояние: {current_state}")
     
-    try:
-        # Проверяем, что это админский колбэк
-        if not callback_data.startswith("admin:"):
-            return False  # Это не админский колбэк, пропускаем
+    # Проверяем права администратора
+    if not is_admin(callback_query.from_user.id):
+        logger.warning(f"Пользователь {callback_query.from_user.id} попытался использовать админский callback без прав")
+        await callback_query.answer("У вас нет прав администратора", show_alert=True)
+        return
         
-        # Проверяем права администратора
-        if not is_admin(callback_query.from_user.id):
-            await callback_query.answer("У вас нет прав администратора", show_alert=True)
-            return True  # Обработали колбэк, но отказали в доступе
+    try:
+        # Ответим на callback_query сразу, чтобы избежать ошибки "query_id invalid"
+        await callback_query.answer()
         
         # Маршрутизация на основе callback_data
         if callback_data == "admin:settings":
             await process_admin_settings(callback_query, state)
+            
         elif callback_data == "admin:stats":
             await process_admin_stats(callback_query, state)
+            
         elif callback_data == "admin:users":
             await process_admin_users(callback_query, state)
+            
         elif callback_data == "admin:pending":
             await process_admin_pending(callback_query, state)
+            
         elif callback_data == "admin:accounts":
             await process_admin_accounts(callback_query, state)
+            
         elif callback_data == "admin:back_to_main":
             await process_admin_back_to_main(callback_query, state)
+            
         elif callback_data.startswith("admin:settings_chat:"):
+            chat_id = int(callback_data.split(":")[2])
             await process_admin_settings_chat(callback_query, state)
+            
         elif callback_data.startswith("admin:approve_request:"):
+            request_id = int(callback_data.split(":")[2])
             await process_admin_approve_request(callback_query, state)
+            
         elif callback_data.startswith("admin:reject_request:"):
+            request_id = int(callback_data.split(":")[2])
             await process_admin_reject_request(callback_query, state)
+            
         elif callback_data == "admin:add_account":
             await process_admin_add_account(callback_query, state)
+            
         elif callback_data == "admin:refresh_session":
             await process_admin_refresh_session(callback_query, state)
+            
         elif callback_data.startswith("admin:edit_chat_info:"):
             await process_edit_chat_info(callback_query, state)
+            
         elif callback_data.startswith("admin:edit_welcome:"):
             await process_edit_welcome(callback_query, state)
+            
         elif callback_data.startswith("admin:edit_join_mode:"):
             await process_edit_join_mode(callback_query, state)
+            
         elif callback_data.startswith("admin:set_join_mode:"):
             await process_set_join_mode(callback_query, state)
+            
         elif callback_data.startswith("admin:toggle_active:"):
             await process_toggle_active(callback_query, state)
+            
         else:
             # Неизвестная команда
             logger.warning(f"Неизвестный админский callback_data: {callback_data}")
-            await callback_query.answer("Неизвестная команда или устаревшая кнопка")
-            await process_admin_back_to_main(callback_query, state)
-        
-        return True  # Колбэк успешно обработан
-        
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text="Неизвестная команда или устаревшая кнопка. Возвращаемся в главное меню.",
+                reply_markup=get_admin_main_keyboard()
+            )
+            await state.set_state(AdminStates.main_menu)
+            
     except Exception as e:
         # Логируем ошибку
-        logger.error(f"Ошибка при обработке админского callback_query {callback_data}: {e}")
-        
-        # Отвечаем на callback_query
-        await callback_query.answer("Произошла ошибка при обработке запроса", show_alert=True)
+        logger.error(f"Ошибка при обработке админского callback_query {callback_data}: {e}", exc_info=True)
         
         try:
             # Возвращаем в главное меню админа
@@ -476,10 +495,17 @@ async def process_admin_callback(callback_query: types.CallbackQuery, state: FSM
                 text="👑 Панель администратора\n\nПроизошла ошибка при обработке запроса. Выберите действие:",
                 reply_markup=get_admin_main_keyboard()
             )
-        except Exception:
-            pass
-        
-        return True  # Обработали колбэк, но произошла ошибка
+        except Exception as e2:
+            logger.error(f"Ошибка при восстановлении после сбоя: {e2}")
+            # В крайнем случае, отправляем новое сообщение
+            try:
+                await bot.send_message(
+                    chat_id=callback_query.message.chat.id,
+                    text="👑 Панель администратора\n\nПроизошла ошибка. Выберите действие:",
+                    reply_markup=get_admin_main_keyboard()
+                )
+            except:
+                pass
 
 # Обработчики нажатий на кнопки
 async def process_admin_settings(callback_query: types.CallbackQuery, state: FSMContext):
@@ -494,9 +520,6 @@ async def process_admin_settings(callback_query: types.CallbackQuery, state: FSM
         text="⚙️ Настройки\n\nВыберите, что вы хотите настроить:",
         reply_markup=get_settings_keyboard()
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_stats(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки статистики"""
@@ -507,9 +530,6 @@ async def process_admin_stats(callback_query: types.CallbackQuery, state: FSMCon
         text="📊 Статистика\n\nВыберите тип статистики:",
         reply_markup=get_stats_keyboard()
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_users(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки пользователей"""
@@ -523,9 +543,6 @@ async def process_admin_users(callback_query: types.CallbackQuery, state: FSMCon
         text="👥 Пользователи\n\nВыберите действие:",
         reply_markup=get_users_keyboard()
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_pending(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки заявок"""
@@ -579,9 +596,6 @@ async def process_admin_pending(callback_query: types.CallbackQuery, state: FSMC
             )
         finally:
             session.close()
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_accounts(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки управления аккаунтами"""
@@ -595,9 +609,6 @@ async def process_admin_accounts(callback_query: types.CallbackQuery, state: FSM
         text="🔒 Управление аккаунтами\n\nВыберите действие:",
         reply_markup=get_accounts_keyboard()
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_back_to_main(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки возврата в главное меню"""
@@ -608,12 +619,9 @@ async def process_admin_back_to_main(callback_query: types.CallbackQuery, state:
     await bot.edit_message_text(
         chat_id=callback_query.message.chat.id,
         message_id=callback_query.message.message_id,
-        text="Панель администратора",
+        text="👑 Панель администратора\n\nВыберите действие:",
         reply_markup=get_admin_main_keyboard()
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_settings_chat(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки настройки конкретного чата"""
@@ -642,9 +650,6 @@ async def process_admin_settings_chat(callback_query: types.CallbackQuery, state
         text=text,
         reply_markup=get_chat_settings_keyboard(chat_id)
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_approve_request(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки одобрения заявки"""
@@ -678,9 +683,6 @@ async def process_admin_approve_request(callback_query: types.CallbackQuery, sta
                 InlineKeyboardButton(text="К списку заявок", callback_data="admin:pending")
             ]])
         )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 async def process_admin_reject_request(callback_query: types.CallbackQuery, state: FSMContext):
     """Обработчик кнопки отклонения заявки"""
@@ -714,9 +716,6 @@ async def process_admin_reject_request(callback_query: types.CallbackQuery, stat
                 InlineKeyboardButton(text="К списку заявок", callback_data="admin:pending")
             ]])
         )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Обработчики нажатий на кнопки админ-панели
 async def process_admin_add_account(callback_query: types.CallbackQuery, state: FSMContext):
@@ -738,9 +737,6 @@ async def process_admin_add_account(callback_query: types.CallbackQuery, state: 
     
     # Устанавливаем состояние добавления аккаунта
     await state.set_state(AdminStates.adding_account)
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Обработчик ввода имени пользователя
 async def process_admin_username_input(message: types.Message, state: FSMContext):
@@ -848,7 +844,6 @@ async def process_admin_refresh_session(callback_query: types.CallbackQuery, sta
                     InlineKeyboardButton(text=MESSAGES["back_button"], callback_data="admin:accounts")
                 ]])
             )
-            await callback_query.answer()
             return
         
         # Формируем список аккаунтов для выбора
@@ -886,9 +881,6 @@ async def process_admin_refresh_session(callback_query: types.CallbackQuery, sta
         )
     finally:
         session.close()
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Новые обработчики для редактирования информации о чате
 async def process_edit_chat_info(callback_query: types.CallbackQuery, state: FSMContext):
@@ -919,9 +911,6 @@ async def process_edit_chat_info(callback_query: types.CallbackQuery, state: FSM
             InlineKeyboardButton(text=MESSAGES["back_button"], callback_data=f"admin:settings_chat:{chat_id}")
         ]])
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Обработчик ввода новой информации о чате
 async def process_edit_chat_info_input(message: types.Message, state: FSMContext):
@@ -1021,9 +1010,6 @@ async def process_edit_welcome(callback_query: types.CallbackQuery, state: FSMCo
             InlineKeyboardButton(text=MESSAGES["back_button"], callback_data=f"admin:settings_chat:{chat_id}")
         ]])
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Обработчик ввода нового приветственного сообщения
 async def process_edit_welcome_input(message: types.Message, state: FSMContext):
@@ -1145,9 +1131,6 @@ async def process_edit_join_mode(callback_query: types.CallbackQuery, state: FSM
         ),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Обработчик установки режима вступления
 async def process_set_join_mode(callback_query: types.CallbackQuery, state: FSMContext):
@@ -1184,9 +1167,6 @@ async def process_set_join_mode(callback_query: types.CallbackQuery, state: FSMC
                 InlineKeyboardButton(text="Вернуться к настройкам чата", callback_data=f"admin:settings_chat:{chat_id}")
             ]])
         )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Обработчик активации/деактивации чата
 async def process_toggle_active(callback_query: types.CallbackQuery, state: FSMContext):
@@ -1227,9 +1207,6 @@ async def process_toggle_active(callback_query: types.CallbackQuery, state: FSMC
                 InlineKeyboardButton(text="Вернуться к настройкам чата", callback_data=f"admin:settings_chat:{chat_id}")
             ]])
         )
-    
-    # Отвечаем на callback query
-    await callback_query.answer()
 
 # Регистрация обработчиков админских команд
 def register_admin_handlers(dp):
@@ -1241,10 +1218,7 @@ def register_admin_handlers(dp):
     dp.message.register(cmd_admin, Command("admin"))
     
     # Регистрация обработчика всех админских callback_query
-    dp.callback_query.register(
-        process_admin_callback,
-        lambda c: c.data and c.data.startswith("admin:")
-    )
+    dp.callback_query.register(process_admin_callback, lambda c: c.data and c.data.startswith("admin:"))
     
     # Регистрация обработчиков текстовых сообщений в различных состояниях
     dp.message.register(process_admin_username_input, AdminStates.adding_account)

@@ -164,6 +164,35 @@ class ChatManager:
                 # Обновляем статус заявки
                 DBManager.update_join_request(request_id, "approved", admin_id)
                 
+                # Проверяем, не состоит ли пользователь уже в чате
+                can_be_added, reason = await ChatManager.check_user_can_be_added(user.user_id, request.chat_id)
+                if not can_be_added and reason != "Пользователь уже состоит в чате":
+                    # Если есть другая причина кроме "уже в чате"
+                    logger.warning(f"Невозможно добавить пользователя {user.user_id} в чат {request.chat_id}: {reason}")
+                    return False, f"Невозможно добавить пользователя: {reason}"
+                
+                if can_be_added:
+                    # Фактически добавляем пользователя в чат через аккаунт админа
+                    try:
+                        # Получаем доступный аккаунт админа
+                        admin_account = DBManager.get_admin_for_chat(request.chat_id)
+                        if not admin_account:
+                            logger.error(f"Нет доступных админов для добавления пользователя {user.user_id} в чат {request.chat_id}")
+                            return False, "Нет доступных админов для добавления"
+                        
+                        # Пытаемся добавить пользователя в чат через аккаунт админа
+                        logger.info(f"Попытка добавить пользователя {user.user_id} в чат {request.chat_id} через аккаунт админа {admin_account.username}")
+                        success, message = await session_manager.add_chat_member(admin_account.id, request.chat_id, user.user_id)
+                        
+                        if not success:
+                            logger.error(f"Ошибка при добавлении пользователя {user.user_id} в чат {request.chat_id}: {message}")
+                            # Обновляем статус заявки на ошибку, но сохраняем, что она была одобрена
+                            DBManager.update_join_request(request_id, "error", admin_id)
+                            return False, f"Заявка одобрена, но произошла ошибка при добавлении: {message}"
+                    except Exception as e:
+                        logger.error(f"Ошибка при добавлении пользователя {user.user_id} в чат {request.chat_id}: {e}")
+                        return False, f"Заявка одобрена, но произошла ошибка при добавлении: {str(e)}"
+                
                 # Добавляем запись о пользователе в чате
                 DBManager.add_chat_member(user.user_id, request.chat_id, admin_id)
                 

@@ -163,6 +163,22 @@ async def add_user_to_chat(user_id, chat_id):
     chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
     
     try:
+        # Сначала создаем диалог с пользователем, чтобы избежать PEER_ID_INVALID
+        try:
+            logger.info(f"Инициализация диалога с пользователем {user_id} перед добавлением...")
+            # Отправляем служебное сообщение пользователю от имени администратора
+            await admin_client.send_message(
+                user_id,
+                "Подготовка к добавлению в чат..."
+            )
+            # Удаляем это сообщение сразу после отправки
+            async for message in admin_client.get_chat_history(user_id, limit=1):
+                await message.delete()
+            logger.info(f"Диалог с пользователем {user_id} успешно инициализирован")
+        except Exception as dialog_error:
+            logger.error(f"Ошибка при инициализации диалога с пользователем {user_id}: {dialog_error}")
+            # Продолжаем выполнение, даже если не удалось инициализировать диалог
+        
         # Получаем список всех чатов для админа
         logger.info("Получаем список чатов")
         dialogs = []
@@ -192,6 +208,13 @@ async def add_user_to_chat(user_id, chat_id):
             
             # Дополнительное логирование для проверки настроек приватности
             logger.info(f"Проверяем возможность добавления пользователя {user_id} в чат {target_chat.id}...")
+            
+            # Принудительное разрешение peer перед добавлением
+            try:
+                await admin_client.resolve_peer(user_id)
+                logger.info(f"Успешно вызван resolve_peer для пользователя {user_id}")
+            except Exception as resolve_err:
+                logger.error(f"Ошибка при вызове resolve_peer: {resolve_err}")
             
             # Попытка добавления
             result = await admin_client.add_chat_members(
@@ -389,6 +412,21 @@ async def add_user_to_chat(user_id, chat_id):
             if "privacy" in error_str or "приватности" in error_str or "restricted" in error_str:
                 logger.warning(f"Обнаружена ошибка приватности из общего исключения: {str(e)}")
                 return False, "UserPrivacyRestricted: Пользователь не может быть добавлен из-за настроек приватности"
+            elif "peer_id_invalid" in error_str or "пользователь не найден" in error_str:
+                # Если ошибка связана с PEER_ID_INVALID, пробуем прямой метод работы через raw API
+                logger.warning(f"Обнаружена ошибка PEER_ID_INVALID: {str(e)}")
+                try:
+                    # Используем raw API для добавления участника
+                    await admin_client.send(
+                        functions.channels.InviteToChannel(
+                            channel=await admin_client.resolve_peer(target_chat.id),
+                            users=[await admin_client.resolve_peer(user_id)]
+                        )
+                    )
+                    logger.info(f"Пользователь {user_id} добавлен через raw API")
+                    return True, "Пользователь успешно добавлен в чат через raw API"
+                except Exception as raw_error:
+                    logger.error(f"Ошибка при добавлении через raw API: {raw_error}")
             else:
                 return False, f"Не удалось добавить пользователя: {str(e)}"
         

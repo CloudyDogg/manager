@@ -5,7 +5,7 @@ import base64
 import hashlib
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from pyrogram import Client, filters, types, errors, raw
+from pyrogram import Client, filters, types, errors, raw, enums
 from pyrogram.raw import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood, InviteHashExpired
 from cryptography.fernet import Fernet
@@ -593,7 +593,7 @@ async def select_chat_callback(client, callback_query):
                                     profile_photos.photos[0][0].file_id,
                                     caption=admin_text,
                                     reply_markup=keyboard,
-                                    parse_mode="HTML"
+                                    parse_mode=enums.ParseMode.HTML
                                 )
                                 logger.info(f"Администратору {admin_id} отправлено уведомление с фото о заявке пользователя {user_id}")
                             else:
@@ -601,7 +601,7 @@ async def select_chat_callback(client, callback_query):
                                     admin_id,
                                     admin_text,
                                     reply_markup=keyboard,
-                                    parse_mode="HTML"
+                                    parse_mode=enums.ParseMode.HTML
                                 )
                                 logger.info(f"Администратору {admin_id} отправлено текстовое уведомление о заявке пользователя {user_id}")
                         except Exception as photo_err:
@@ -610,7 +610,7 @@ async def select_chat_callback(client, callback_query):
                                 admin_id,
                                 admin_text,
                                 reply_markup=keyboard,
-                                parse_mode="HTML"
+                                parse_mode=enums.ParseMode.HTML
                             )
                             logger.info(f"Администратору {admin_id} отправлено текстовое уведомление о заявке пользователя {user_id}")
                     except Exception as e:
@@ -734,7 +734,7 @@ async def admin_users_callback(client, callback_query):
         # Создаем клавиатуру с кнопками
         reply_markup = types.InlineKeyboardMarkup(keyboard)
         
-        await callback_query.edit_message_text(users_text, reply_markup=reply_markup, parse_mode="HTML")
+        await callback_query.edit_message_text(users_text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         logger.error(f"Ошибка при получении списка пользователей: {e}")
         await callback_query.edit_message_text("Произошла ошибка при получении списка пользователей.")
@@ -1108,7 +1108,7 @@ async def check_pending_manual_requests():
                                     profile_photos.photos[0][0].file_id,
                                     caption=admin_text,
                                     reply_markup=keyboard,
-                                    parse_mode="HTML"
+                                    parse_mode=enums.ParseMode.HTML
                                 )
                                 logger.info(f"Администратору {admin_id} отправлено уведомление с фото о заявке пользователя {user_id}")
                             else:
@@ -1116,7 +1116,7 @@ async def check_pending_manual_requests():
                                     admin_id,
                                     admin_text,
                                     reply_markup=keyboard,
-                                    parse_mode="HTML"
+                                    parse_mode=enums.ParseMode.HTML
                                 )
                                 logger.info(f"Администратору {admin_id} отправлено текстовое уведомление о заявке пользователя {user_id}")
                         except Exception as photo_err:
@@ -1125,7 +1125,7 @@ async def check_pending_manual_requests():
                                 admin_id,
                                 admin_text,
                                 reply_markup=keyboard,
-                                parse_mode="HTML"
+                                parse_mode=enums.ParseMode.HTML
                             )
                             logger.info(f"Администратору {admin_id} отправлено текстовое уведомление о заявке пользователя {user_id}")
                     except Exception as e:
@@ -1636,20 +1636,20 @@ async def user_details_callback(client, callback_query):
                         profile_photos.photos[0][0].file_id,
                         caption=details_text,
                         reply_markup=keyboard,
-                        parse_mode="HTML"
+                        parse_mode=enums.ParseMode.HTML
                     )
                 else:
                     await callback_query.edit_message_text(
                         details_text, 
                         reply_markup=keyboard, 
-                        parse_mode="HTML"
+                        parse_mode=enums.ParseMode.HTML
                     )
             except Exception as photo_err:
                 logger.error(f"Ошибка при отправке фото профиля: {photo_err}")
                 await callback_query.edit_message_text(
                     details_text, 
                     reply_markup=keyboard, 
-                    parse_mode="HTML"
+                    parse_mode=enums.ParseMode.HTML
                 )
                 
         except Exception as user_err:
@@ -1676,7 +1676,7 @@ async def user_details_callback(client, callback_query):
             await callback_query.edit_message_text(
                 error_text, 
                 reply_markup=keyboard, 
-                parse_mode="HTML"
+                parse_mode=enums.ParseMode.HTML
             )
     except Exception as e:
         logger.error(f"Ошибка при просмотре информации о пользователе: {e}")

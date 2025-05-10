@@ -151,9 +151,6 @@ async def add_user_to_chat(user_id, chat_id):
     # Определяем имя чата
     chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
     
-    # Название целевого чата (должно точно совпадать с названием в Telegram)
-    target_chat_title = "test"  # Замените на реальное название чата!
-    
     try:
         # Получаем список всех чатов для админа
         logger.info("Получаем список чатов")
@@ -162,52 +159,21 @@ async def add_user_to_chat(user_id, chat_id):
             dialogs.append(dialog)
             logger.info(f"Найден чат: {dialog.chat.title or dialog.chat.first_name} (ID: {dialog.chat.id})")
         
-        # Ищем чат сначала по имени (так как это более надежный способ)
+        # Ищем чат с заголовком "test"
         target_chat = None
-        
-        # Сначала пытаемся найти по точному названию
         for dialog in dialogs:
-            if dialog.chat and dialog.chat.title == target_chat_title:
+            if dialog.chat.title == "test":
                 target_chat = dialog.chat
-                logger.info(f"Найден чат по названию: {dialog.chat.title} (ID: {dialog.chat.id})")
+                logger.info(f"Найден нужный чат: {dialog.chat.title} (ID: {dialog.chat.id})")
                 break
-                
-        # Если не нашли по названию, пробуем по ID
-        if not target_chat:
-            for dialog in dialogs:
-                if dialog.chat and dialog.chat.id:
-                    # Проверяем, подходит ли этот чат по ID
-                    str_dialog_id = str(dialog.chat.id)
-                    str_chat_id = str(chat_id)
-                    
-                    # Удаляем -100 из начала ID, если они есть, для сравнения
-                    if str_dialog_id.startswith('-100'):
-                        str_dialog_id = str_dialog_id[4:]
-                    if str_chat_id.startswith('-100'):
-                        str_chat_id = str_chat_id[4:]
-                        
-                    # Если ID совпадают после обработки
-                    if str_dialog_id == str_chat_id or dialog.chat.id == chat_id:
-                        target_chat = dialog.chat
-                        logger.info(f"Найден чат по ID: {dialog.chat.title or 'Без названия'} (ID: {dialog.chat.id})")
-                        break
-        
-        # Если всё еще не нашли, берем первый доступный групповой чат
-        if not target_chat:
-            logger.warning(f"Не удалось найти чат ни по названию '{target_chat_title}', ни по ID {chat_id}")
-            for dialog in dialogs:
-                if dialog.chat and dialog.chat.type in ["group", "supergroup"]:
-                    target_chat = dialog.chat
-                    logger.info(f"Используем первый доступный групповой чат: {dialog.chat.title or 'Без названия'} (ID: {dialog.chat.id})")
-                    break
         
         if not target_chat:
-            logger.error(f"Не удалось найти подходящий чат")
-            return False, "Не удалось найти чат для добавления пользователя"
+            logger.error("Не удалось найти целевой чат")
+            return False, "Не удалось найти чат для добавления"
         
         try:
             # Добавляем пользователя напрямую
-            logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {target_chat.id} ({target_chat.title or 'Без названия'})")
+            logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {target_chat.id}")
             
             # Используем метод add_chat_members для добавления пользователя
             await admin_client.add_chat_members(

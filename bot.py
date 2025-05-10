@@ -229,6 +229,8 @@ async def add_user_to_chat(user_id, chat_id):
                     join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
                     if join_request:
                         join_request.status = "approved"
+                        join_request.approved_by = 0  # 0 означает автоматическое одобрение системой
+                        join_request.approved_at = datetime.now()
                         session.commit()
                 except Exception as e:
                     logger.error(f"Ошибка при обновлении статуса заявки: {e}")
@@ -1059,7 +1061,23 @@ async def admin_requests_history_callback(client, callback_query):
             requests_text += f"Username: {username}\n"
             requests_text += f"Чат: {chat_name}\n"
             requests_text += f"Статус: {status_emoji} {status_text}\n"
-            requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            requests_text += f"Дата: {req.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            
+            # Добавляем информацию о том, кто и когда обработал заявку
+            if req.approved_by is not None and req.approved_at is not None:
+                if req.approved_by == 0:
+                    admin_name = "Система (автоматически)"
+                else:
+                    try:
+                        admin_info = await client.get_users(req.approved_by)
+                        admin_name = f"{admin_info.first_name} {admin_info.last_name or ''} (@{admin_info.username or 'нет'})"
+                    except Exception:
+                        admin_name = f"Администратор ID:{req.approved_by}"
+                
+                requests_text += f"Обработана: {admin_name}\n"
+                requests_text += f"Дата обработки: {req.approved_at.strftime('%d.%m.%Y %H:%M')}\n"
+            
+            requests_text += "\n"
         
         # Добавляем кнопку назад
         keyboard = types.InlineKeyboardMarkup([
@@ -1734,6 +1752,8 @@ async def manual_add_callback(client, callback_query):
                 join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="manual_check").first()
                 if join_request:
                     join_request.status = "approved"
+                    join_request.approved_by = callback_query.from_user.id
+                    join_request.approved_at = datetime.now()
                     session.commit()
                     logger.info(f"Статус заявки обновлен на 'approved'")
                 else:

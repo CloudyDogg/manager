@@ -66,6 +66,8 @@ class JoinRequest(Base):
     chat_id = Column(Integer)
     status = Column(String, default="pending")  # pending, approved, rejected
     created_at = Column(DateTime, default=datetime.now)
+    approved_by = Column(Integer, nullable=True)  # ID администратора, который обработал заявку
+    approved_at = Column(DateTime, nullable=True)  # Время обработки заявки
 
 class RateLimitBlock(Base):
     __tablename__ = "rate_limit_blocks"

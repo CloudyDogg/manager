@@ -10,7 +10,7 @@ from pyrogram.raw import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood, InviteHashExpired
 from cryptography.fernet import Fernet
 import json
-from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting
+from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine
 
 # Настройка логирования
 logging.basicConfig(
@@ -143,6 +143,16 @@ async def add_user_to_chat(user_id, chat_id):
     """
     Прямое добавление пользователя в чат администратором
     """
+    # Проверяем, включено ли автоматическое добавление
+    auto_add_enabled = get_setting("auto_add_enabled", "true")
+    logger.info(f"Статус автодобавления: auto_add_enabled = '{auto_add_enabled}'")
+    
+    if auto_add_enabled.lower() != "true":
+        logger.info(f"⚠️ Автоматическое добавление отключено. Пользователь {user_id} не был добавлен автоматически.")
+        return False, "auto_add_disabled"
+    
+    logger.info(f"✅ Автоматическое добавление включено. Начинаем добавление пользователя {user_id}")
+    
     admin_client = await get_admin_client()
     if not admin_client:
         logger.error(f"Нет доступного администратора")
@@ -521,10 +531,11 @@ async def select_chat_callback(client, callback_query):
                         logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
             elif message == "auto_add_disabled":
                 # Если автодобавление отключено, оповещаем пользователя о ручной проверке
+                logger.info(f"⚠️ Режим автодобавления отключен. Заявка пользователя {user_id} переведена в статус ручной проверки")
+                
                 join_request.status = "manual_check"
                 session.commit()
-                
-                logger.info(f"Автодобавление отключено. Заявка пользователя {user_id} переведена в статус ручной проверки")
+                logger.info(f"Обновлен статус заявки на 'manual_check' для пользователя {user_id}")
                 
                 # Информируем пользователя о ручной проверке
                 keyboard = types.InlineKeyboardMarkup([
@@ -536,6 +547,7 @@ async def select_chat_callback(client, callback_query):
                     "⌛ Вы будете добавлены после одобрения заявки администратором.",
                     reply_markup=keyboard
                 )
+                logger.info(f"Отправлено уведомление пользователю {user_id} о ручной проверке")
                 
                 # Отправляем администраторам информацию о пользователе с кнопками для добавления
                 user_info = await client.get_users(user_id)
@@ -846,8 +858,16 @@ async def toggle_auto_add_on_callback(client, callback_query):
     """
     try:
         # Устанавливаем флаг в значение true
+        old_value = get_setting("auto_add_enabled", "true")
+        logger.info(f"Текущее значение auto_add_enabled перед включением: {old_value}")
+        
+        # Принудительно устанавливаем новое значение
         set_setting("auto_add_enabled", "true")
         logger.info(f"Администратор {callback_query.from_user.id} включил автоматическое добавление")
+        
+        # Проверяем, что значение успешно изменено
+        new_value = get_setting("auto_add_enabled", "true")
+        logger.info(f"Новое значение auto_add_enabled после включения: {new_value}")
         
         # Уведомляем администратора
         await callback_query.answer("✅ Автоматическое добавление пользователей включено")
@@ -889,8 +909,16 @@ async def toggle_auto_add_off_callback(client, callback_query):
     """
     try:
         # Устанавливаем флаг в значение false
+        old_value = get_setting("auto_add_enabled", "true")
+        logger.info(f"Текущее значение auto_add_enabled перед отключением: {old_value}")
+        
+        # Принудительно устанавливаем новое значение
         set_setting("auto_add_enabled", "false")
         logger.info(f"Администратор {callback_query.from_user.id} отключил автоматическое добавление")
+        
+        # Проверяем, что значение успешно изменено
+        new_value = get_setting("auto_add_enabled", "false")
+        logger.info(f"Новое значение auto_add_enabled после отключения: {new_value}")
         
         # Уведомляем администратора
         await callback_query.answer("✅ Автоматическое добавление пользователей отключено")
@@ -930,14 +958,45 @@ async def startup():
     Функция запуска
     """
     # Инициализация базы данных
+    logger.info("Инициализация базы данных...")
     init_db()
+    logger.info("База данных инициализирована")
+    
+    # Проверка таблицы Settings
+    session = get_session()
+    try:
+        logger.info("Проверка таблицы Settings...")
+        # Проверяем, существует ли таблица settings
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        if 'settings' in inspector.get_table_names():
+            logger.info("Таблица Settings существует")
+        else:
+            logger.warning("Таблица Settings не существует. Пытаемся создать...")
+            Base.metadata.tables['settings'].create(engine)
+            logger.info("Таблица Settings создана")
+    except Exception as e:
+        logger.error(f"Ошибка при проверке таблицы Settings: {e}")
+    finally:
+        session.close()
     
     # Инициализация настроек
-    if get_setting("auto_add_enabled") is None:
-        logger.info("Инициализация настройки auto_add_enabled со значением true")
+    logger.info("Проверка настройки auto_add_enabled...")
+    auto_add_value = get_setting("auto_add_enabled")
+    
+    if auto_add_value is None:
+        logger.info("Настройка auto_add_enabled не найдена. Инициализация со значением 'true'...")
         set_setting("auto_add_enabled", "true")
+        logger.info("Настройка auto_add_enabled создана со значением 'true'")
+    else:
+        logger.info(f"Настройка auto_add_enabled найдена. Текущее значение: '{auto_add_value}'")
+    
+    # Повторная проверка настройки
+    current_value = get_setting("auto_add_enabled", "true")
+    logger.info(f"Итоговое значение настройки auto_add_enabled: '{current_value}'")
     
     # Запуск бота
+    logger.info("Запуск бота...")
     await bot.start()
     logger.info("Бот запущен")
     
@@ -978,18 +1037,26 @@ async def manual_add_callback(client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         chat_id = int(callback_query.data.split("_")[3])
         
+        logger.info(f"Начато ручное добавление пользователя {user_id} в чат {chat_id} администратором {callback_query.from_user.id}")
+        
         # Сообщаем администратору, что начинаем процесс добавления
         await callback_query.answer("Начинаем процесс добавления пользователя...")
         
         # Временно включаем автодобавление для этой операции
         current_auto_add = get_setting("auto_add_enabled", "true")
+        logger.info(f"Сохранено текущее значение настройки auto_add_enabled: {current_auto_add}")
+        
+        # Принудительно включаем автодобавление для этой операции
         set_setting("auto_add_enabled", "true")
+        logger.info(f"Временно включено автодобавление для ручной операции")
         
         # Вызываем функцию добавления пользователя
         success, message = await add_user_to_chat(user_id, chat_id)
+        logger.info(f"Результат ручного добавления: success={success}, message={message}")
         
         # Восстанавливаем предыдущее значение настройки
         set_setting("auto_add_enabled", current_auto_add)
+        logger.info(f"Восстановлено предыдущее значение auto_add_enabled: {current_auto_add}")
         
         if success:
             # Обновляем сообщение администратора
@@ -1003,7 +1070,19 @@ async def manual_add_callback(client, callback_query):
                 f"Добавлен вручную администратором: {callback_query.from_user.first_name}\n"
                 f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             )
-            await callback_query.edit_message_caption(caption=admin_text)
+            
+            try:
+                # Если сообщение было с фото (caption)
+                await callback_query.edit_message_caption(caption=admin_text)
+                logger.info(f"Обновлено сообщение с фото для администратора")
+            except Exception as caption_err:
+                # Если сообщение было текстовым
+                logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
+                try:
+                    await callback_query.edit_message_text(admin_text)
+                    logger.info(f"Обновлено текстовое сообщение для администратора")
+                except Exception as text_err:
+                    logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
             
             # Обновляем статус заявки
             session = get_session()
@@ -1012,6 +1091,9 @@ async def manual_add_callback(client, callback_query):
                 if join_request:
                     join_request.status = "approved"
                     session.commit()
+                    logger.info(f"Статус заявки обновлен на 'approved'")
+                else:
+                    logger.warning(f"Не найдена заявка в статусе 'manual_check' для пользователя {user_id} и чата {chat_id}")
             except Exception as e:
                 logger.error(f"Ошибка при обновлении статуса заявки: {e}")
             finally:
@@ -1037,7 +1119,19 @@ async def manual_add_callback(client, callback_query):
                 f"Ошибка: {message}\n"
                 f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             )
-            await callback_query.edit_message_caption(caption=error_text)
+            
+            try:
+                # Если сообщение было с фото (caption)
+                await callback_query.edit_message_caption(caption=error_text)
+                logger.info(f"Обновлено сообщение с фото для администратора (ошибка)")
+            except Exception as caption_err:
+                # Если сообщение было текстовым
+                logger.info(f"Не удалось обновить caption, пробуем обновить текст сообщения: {caption_err}")
+                try:
+                    await callback_query.edit_message_text(error_text)
+                    logger.info(f"Обновлено текстовое сообщение для администратора (ошибка)")
+                except Exception as text_err:
+                    logger.error(f"Не удалось обновить сообщение администратора: {text_err}")
             
             # Обновляем статус заявки в зависимости от ошибки
             session = get_session()
@@ -1046,9 +1140,13 @@ async def manual_add_callback(client, callback_query):
                 if join_request:
                     if "приватности" in message.lower() or "privacy" in message.lower() or "UserPrivacyRestricted" in message:
                         join_request.status = "link_sent"
+                        logger.info(f"Статус заявки обновлен на 'link_sent' из-за проблем с приватностью")
                     else:
                         join_request.status = "rejected"
+                        logger.info(f"Статус заявки обновлен на 'rejected' из-за ошибки")
                     session.commit()
+                else:
+                    logger.warning(f"Не найдена заявка в статусе 'manual_check' для пользователя {user_id} и чата {chat_id}")
             except Exception as e:
                 logger.error(f"Ошибка при обновлении статуса заявки: {e}")
             finally:

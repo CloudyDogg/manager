@@ -547,11 +547,18 @@ async def select_chat_callback(client, callback_query):
                 keyboard = types.InlineKeyboardMarkup([
                     [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
                 ])
-                await callback_query.edit_message_text(
+                
+                # Получаем настраиваемый текст сообщения о настройках приватности
+                privacy_message = get_setting("privacy_message",
                     "🔒 Из-за ваших настроек приватности мы не смогли добавить вас автоматически.\n\n"
                     "✉️ Мы отправили вам инструкции по изменению настроек приватности в личном сообщении.\n\n"
-                    "👆 Проверьте сообщения от бота и следуйте инструкциям.",
-                    reply_markup=keyboard
+                    "👆 Проверьте сообщения от бота и следуйте инструкциям."
+                )
+                
+                await callback_query.edit_message_text(
+                    privacy_message,
+                    reply_markup=keyboard,
+                    parse_mode=enums.ParseMode.MARKDOWN
                 )
                 
                 # Отправляем администраторам информацию о пользователе
@@ -584,11 +591,18 @@ async def select_chat_callback(client, callback_query):
                 keyboard = types.InlineKeyboardMarkup([
                     [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
                 ])
-                await callback_query.edit_message_text(
+                
+                # Получаем настраиваемый текст сообщения о ручной проверке
+                manual_check_message = get_setting("manual_check_message",
                     "⏳ Ваша заявка принята и будет рассмотрена администратором.\n\n"
                     "📋 В данный момент включен режим ручного добавления пользователей.\n"
-                    "⌛ Вы будете добавлены после одобрения заявки администратором.",
-                    reply_markup=keyboard
+                    "⌛ Вы будете добавлены после одобрения заявки администратором."
+                )
+                
+                await callback_query.edit_message_text(
+                    manual_check_message,
+                    reply_markup=keyboard,
+                    parse_mode=enums.ParseMode.MARKDOWN
                 )
                 logger.info(f"Отправлено уведомление пользователю {user_id} о ручной проверке")
                 
@@ -667,12 +681,24 @@ async def select_chat_callback(client, callback_query):
                 join_request.status = "rejected"
                 session.commit()
                 
-                error_text = f"❌ Не удалось добавить вас в чат: {message}\n\nПопробуйте позже или обратитесь в поддержку."
+                # Получаем настраиваемый текст сообщения об ошибке
+                error_message_template = get_setting("error_message_template", 
+                    "❌ Не удалось добавить вас в чат: {error}\n\nПопробуйте позже или обратитесь в поддержку."
+                )
+                
+                # Подставляем конкретную ошибку в шаблон
+                error_text = error_message_template.replace("{error}", message)
+                
                 keyboard = types.InlineKeyboardMarkup([
                     [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")],
                     [types.InlineKeyboardButton("📞 Поддержка", callback_data="support")]
                 ])
-                await callback_query.edit_message_text(error_text, reply_markup=keyboard)
+                
+                await callback_query.edit_message_text(
+                    error_text, 
+                    reply_markup=keyboard,
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
                 
                 # Уведомляем администраторов об ошибке
                 admin_error_text = f"❌ Ошибка при добавлении пользователя:\n\n"
@@ -716,11 +742,16 @@ async def support_callback(client, callback_query):
     """
     Обработка запроса в поддержку
     """
-    support_text = "📞 Для обращения в поддержку напишите личное сообщение администратору."
+    # Получаем настраиваемый текст поддержки
+    support_text = get_setting("support_text", 
+        "📞 Для обращения в поддержку напишите личное сообщение администратору."
+    )
+    
     keyboard = types.InlineKeyboardMarkup([
         [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
     ])
-    await callback_query.edit_message_text(support_text, reply_markup=keyboard)
+    
+    await callback_query.edit_message_text(support_text, reply_markup=keyboard, parse_mode=enums.ParseMode.MARKDOWN)
 
 # Команды администратора
 @bot.on_message(filters.command("admin") & filters.private & filters.user(ADMIN_IDS))
@@ -1383,7 +1414,8 @@ async def ui_text_settings_callback(client, callback_query):
     """
     try:
         ui_text_menu = "✏️ Настройка текстов интерфейса:\n\n"
-        ui_text_menu += "Выберите, какой текст вы хотите изменить:\n"
+        ui_text_menu += "Выберите, какой текст вы хотите изменить:\n\n"
+        ui_text_menu += "📝 <b>Тексты кнопок:</b>\n"
         
         # Создаем клавиатуру с кнопками для редактирования различных текстов
         keyboard = types.InlineKeyboardMarkup([
@@ -1391,12 +1423,18 @@ async def ui_text_settings_callback(client, callback_query):
             [types.InlineKeyboardButton("✏️ Кнопка 'Узнать подробности'", callback_data="edit_button_info_text")],
             [types.InlineKeyboardButton("✏️ Кнопка 'Поддержка'", callback_data="edit_button_support_text")],
             [types.InlineKeyboardButton("✏️ Приветственное сообщение", callback_data="edit_welcome_message")],
-            [types.InlineKeyboardButton("✏️ Текст выбора чата", callback_data="edit_chat_select_text")],
+            [types.InlineKeyboardButton("───────────────────", callback_data="preview_no_action")],
+            [types.InlineKeyboardButton("📄 <b>Содержимое сообщений:</b>", callback_data="preview_no_action")],
             [types.InlineKeyboardButton("✏️ Информация о чатах", callback_data="edit_info_text")],
+            [types.InlineKeyboardButton("✏️ Текст выбора чата", callback_data="edit_chat_select_text")],
+            [types.InlineKeyboardButton("✏️ Текст поддержки", callback_data="edit_support_text")],
+            [types.InlineKeyboardButton("✏️ Сообщение о приватности", callback_data="edit_privacy_message")],
+            [types.InlineKeyboardButton("✏️ Сообщение о ручной проверке", callback_data="edit_manual_check_message")],
+            [types.InlineKeyboardButton("✏️ Шаблон сообщения об ошибке", callback_data="edit_error_message_template")],
             [types.InlineKeyboardButton("↩️ Назад в настройки", callback_data="back_to_settings")]
         ])
         
-        await callback_query.edit_message_text(ui_text_menu, reply_markup=keyboard)
+        await callback_query.edit_message_text(ui_text_menu, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         logger.error(f"Ошибка при отображении меню настройки текстов интерфейса: {e}")
         await callback_query.answer("Произошла ошибка при загрузке настроек текстов")
@@ -1417,7 +1455,11 @@ async def edit_ui_text_callback(client, callback_query):
             "button_support_text": "кнопки 'Поддержка'",
             "welcome_message": "приветственного сообщения",
             "chat_select_text": "текста выбора чата",
-            "info_text": "информации о чатах"
+            "info_text": "информации о чатах",
+            "support_text": "текста поддержки",
+            "privacy_message": "текста сообщения о приватности",
+            "manual_check_message": "текста сообщения о ручной проверке",
+            "error_message_template": "шаблона сообщения об ошибке"
         }
         
         # Словарь значений по умолчанию
@@ -1427,7 +1469,11 @@ async def edit_ui_text_callback(client, callback_query):
             "button_support_text": "📞 Поддержка",
             "welcome_message": "👋 Привет! Выберите действие:",
             "chat_select_text": "Выберите чат, в который хотите вступить:",
-            "info_text": "ℹ️ *Информация о чатах*\n\nНаши чаты предназначены для общения на разные темы."
+            "info_text": "ℹ️ *Информация о чатах*\n\nНаши чаты предназначены для общения на разные темы.",
+            "support_text": "📞 Поддержка бота",
+            "privacy_message": "🔒 К сожалению, ваши настройки приватности не позволяют добавить вас автоматически.\n\n🔍 Чтобы решить эту проблему, вам необходимо изменить настройки конфиденциальности:\n\n👉 Откройте настройки Telegram\n👉 Перейдите в раздел 'Конфиденциальность'\n👉 Выберите 'Группы и каналы'\n👉 Для опции 'Кто может добавить меня в группы' выберите 'Все'\n\n📱 Вот как это выглядит (смотрите приложенные картинки):\n",
+            "manual_check_message": "⏳ Ваша заявка принята и будет рассмотрена администратором.\n\n📋 В данный момент включен режим ручного добавления пользователей.\n⌛ Вы будете добавлены после одобрения заявки администратором.",
+            "error_message_template": "❌ Не удалось добавить вас в чат: {error}\n\nПопробуйте позже или обратитесь в поддержку."
         }
         
         # Проверяем, есть ли такая настройка в наших словарях

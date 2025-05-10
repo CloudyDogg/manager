@@ -1,6 +1,8 @@
 import os
 import json
 import asyncio
+import base64
+import hashlib
 from dotenv import load_dotenv
 from pyrogram import Client
 from cryptography.fernet import Fernet
@@ -13,8 +15,15 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
+# Подготовка ключа шифрования
+def get_fernet_key(password):
+    # Преобразуем пароль в 32-байтный ключ
+    key = hashlib.sha256(password.encode()).digest()
+    # Кодируем в base64 в URL-safe формате
+    return base64.urlsafe_b64encode(key)
+
 # Инициализация шифрования
-cipher_suite = Fernet(ENCRYPTION_KEY.encode())
+cipher_suite = Fernet(get_fernet_key(ENCRYPTION_KEY))
 
 async def create_admin_session(phone_number):
     """

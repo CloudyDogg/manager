@@ -1,6 +1,8 @@
 import os
 import logging
 import asyncio
+import base64
+import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
 from pyrogram import Client, filters, types
@@ -30,8 +32,15 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 CHAT_ID_1 = int(os.getenv("CHAT_ID_1"))
 CHAT_ID_2 = int(os.getenv("CHAT_ID_2"))
 
+# Подготовка ключа шифрования
+def get_fernet_key(password):
+    # Преобразуем пароль в 32-байтный ключ
+    key = hashlib.sha256(password.encode()).digest()
+    # Кодируем в base64 в URL-safe формате
+    return base64.urlsafe_b64encode(key)
+
 # Инициализация шифрования
-cipher_suite = Fernet(ENCRYPTION_KEY.encode())
+cipher_suite = Fernet(get_fernet_key(ENCRYPTION_KEY))
 
 # Инициализация бота
 bot = Client("telegram_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)

@@ -61,8 +61,17 @@ async def get_admin_client():
     """
     global active_admin_client
     
+    # Если клиент уже создан и активен, возвращаем его
     if active_admin_client and hasattr(active_admin_client, 'is_connected') and active_admin_client.is_connected:
         return active_admin_client
+    
+    # Если клиент существует, но не активен, пытаемся остановить его
+    if active_admin_client:
+        try:
+            await active_admin_client.stop()
+        except:
+            pass
+        active_admin_client = None
     
     session = get_session()
     try:
@@ -73,17 +82,33 @@ async def get_admin_client():
             logger.error("Нет доступных аккаунтов администраторов")
             return None
         
-        # Расшифровываем данные сессии
-        session_data = decrypt_session(admin_account.session_data)
+        logger.info(f"Используем аккаунт администратора: {admin_account.phone}")
         
-        # Создаем и запускаем клиент напрямую из session_string
+        # Расшифровываем данные сессии
         try:
+            session_data = decrypt_session(admin_account.session_data)
+            session_string = session_data.get("session_string")
+            
+            if not session_string:
+                logger.error("Нет строки сессии в данных аккаунта")
+                return None
+                
+            # Создаем клиент из строки сессии
             client = Client(
-                ":memory:",
+                name="admin",
                 api_id=API_ID,
-                api_hash=API_HASH
+                api_hash=API_HASH,
+                session_string=session_string,
+                in_memory=True
             )
+            
+            # Запускаем клиент
             await client.start()
+            logger.info("Клиент администратора запущен успешно")
+            
+            # Получаем информацию о самом себе для проверки
+            me = await client.get_me()
+            logger.info(f"Авторизован как: {me.first_name} {me.last_name or ''} (@{me.username or 'нет'})")
             
             # Обновляем статистику использования
             admin_account.last_used = datetime.now()
@@ -93,7 +118,7 @@ async def get_admin_client():
             active_admin_client = client
             return client
         except Exception as e:
-            logger.error(f"Ошибка при запуске клиента администратора: {e}")
+            logger.error(f"Ошибка при инициализации клиента: {e}")
             return None
     except Exception as e:
         logger.error(f"Ошибка при получении клиента администратора: {e}")
@@ -110,15 +135,19 @@ async def add_user_to_chat(user_id, chat_id):
         return False, "Нет доступного администратора для добавления в чат"
     
     try:
-        # Для суперчатов добавляем префикс -100 для совместимости с Pyrogram
-        if chat_id > 0:
-            pyrogram_chat_id = f"-100{chat_id}"
-        else:
-            pyrogram_chat_id = chat_id
-            
-        logger.info(f"Попытка добавления пользователя {user_id} в чат {pyrogram_chat_id}")
+        # Используем ID чата напрямую без преобразований
+        logger.info(f"Попытка добавления пользователя {user_id} в чат с ID {chat_id}")
         
-        await admin_client.add_chat_members(pyrogram_chat_id, user_id)
+        # Получаем информацию о чате, чтобы убедиться, что клиент имеет к нему доступ
+        try:
+            chat_info = await admin_client.get_chat(chat_id)
+            logger.info(f"Информация о чате получена: {chat_info.title}, тип: {chat_info.type}")
+        except Exception as e:
+            logger.error(f"Не удалось получить информацию о чате {chat_id}: {e}")
+            return False, f"Ошибка доступа к чату: {str(e)}"
+        
+        # Добавляем пользователя напрямую, используя ID, полученный из .env
+        await admin_client.add_chat_members(chat_id, user_id)
         return True, "Пользователь успешно добавлен в чат"
     except UserAlreadyParticipant:
         return False, "Пользователь уже в чате"

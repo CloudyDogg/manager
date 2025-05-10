@@ -5,7 +5,8 @@ import base64
 import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
-from pyrogram import Client, filters, types
+from pyrogram import Client, filters, types, errors, raw
+from pyrogram import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood
 from cryptography.fernet import Fernet
 import json
@@ -204,10 +205,39 @@ async def add_user_to_chat(user_id, chat_id):
         for variant in chat_variants:
             try:
                 logger.info(f"Пробуем добавить пользователя {user_id} в чат с ID {variant}")
-                await admin_client.add_chat_members(variant, user_id)
-                logger.info(f"Успешно добавлен пользователь в чат с ID {variant}")
-                success = True
-                break
+                
+                # Пробуем несколько способов добавления пользователя
+                try:
+                    # Способ 1: Использование метода add_chat_members
+                    await admin_client.add_chat_members(variant, user_id)
+                    logger.info(f"Метод add_chat_members успешен для ID {variant}")
+                    success = True
+                    break
+                except Exception as e1:
+                    logger.error(f"add_chat_members не сработал для ID {variant}: {e1}")
+                    # Способ 2: Использование low-level API для invite_to_channel
+                    try:
+                        # Получаем объект чата
+                        chat = await admin_client.get_chat(variant)
+                        logger.info(f"Получен объект чата: {chat.title}, тип: {chat.type}")
+                        
+                        # Получаем объект пользователя
+                        user = await admin_client.get_users(user_id)
+                        
+                        # Используем метод join_chat для добавления пользователя
+                        result = await admin_client.invoke(
+                            functions.channels.InviteToChannel(
+                                channel=await admin_client.resolve_peer(variant),
+                                users=[await admin_client.resolve_peer(user_id)]
+                            )
+                        )
+                        logger.info(f"Метод InviteToChannel успешен для ID {variant}")
+                        success = True
+                        break
+                    except Exception as e2:
+                        logger.error(f"InviteToChannel не сработал для ID {variant}: {e2}")
+                        raise e2
+                
             except UserAlreadyParticipant:
                 logger.info(f"Пользователь уже в чате с ID {variant}")
                 return False, "Пользователь уже в чате"

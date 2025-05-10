@@ -1419,43 +1419,73 @@ async def back_to_admin_callback(client, callback_query):
     """
     Возврат в панель администратора
     """
-    user_id = callback_query.from_user.id
-    
-    # Проверяем и сбрасываем все состояния пользователя
-    waiting_phone = get_setting(f"waiting_phone_{user_id}", "false")
-    waiting_code = get_setting(f"waiting_code_{user_id}", "false")
-    
-    if waiting_phone.lower() == "true" or waiting_code.lower() == "true":
-        # Сбрасываем состояния
-        set_setting(f"waiting_phone_{user_id}", "false")
-        set_setting(f"waiting_code_{user_id}", "false")
-        set_setting(f"temp_phone_{user_id}", "")
-        set_setting(f"temp_code_hash_{user_id}", "")
+    try:
+        logger.info(f"Вызвана функция back_to_admin_callback, callback_data: {callback_query.data}")
+        await callback_query.answer("Возврат в панель администратора...")
         
-        logger.info(f"Администратор {user_id} отменил добавление аккаунта")
+        user_id = callback_query.from_user.id
+        
+        # Проверяем и сбрасываем все состояния пользователя
+        waiting_phone = get_setting(f"waiting_phone_{user_id}", "false")
+        waiting_code = get_setting(f"waiting_code_{user_id}", "false")
+        
+        if waiting_phone.lower() == "true" or waiting_code.lower() == "true":
+            # Сбрасываем состояния
+            set_setting(f"waiting_phone_{user_id}", "false")
+            set_setting(f"waiting_code_{user_id}", "false")
+            set_setting(f"temp_phone_{user_id}", "")
+            set_setting(f"temp_code_hash_{user_id}", "")
+            
+            logger.info(f"Администратор {user_id} отменил добавление аккаунта")
+        
+        admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
+        
+        # Получаем текущий статус автодобавления
+        auto_add_enabled = get_setting("auto_add_enabled", "true").lower() == "true"
+        auto_add_button_text = "🔴 Отключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
+        auto_add_callback = "toggle_auto_add_off" if auto_add_enabled else "toggle_auto_add_on"
+        
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
+            [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
+            [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
+            [types.InlineKeyboardButton("⚠️ Пользователи с ограничениями", callback_data="admin_rate_limited_users")],
+            [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
+            [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
+            [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
+            [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
+            [types.InlineKeyboardButton("📱 Управление аккаунтами", callback_data="admin_manage_accounts")],
+            [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
+            [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
+        ])
+        
+        try:
+            await callback_query.edit_message_text(admin_text, reply_markup=keyboard)
+            logger.info("Успешный возврат в панель администратора")
+        except errors.MessageNotModified:
+            logger.warning("Сообщение не было изменено (уже содержит панель администратора)")
+            await callback_query.answer("Панель администратора")
+        except Exception as edit_error:
+            logger.error(f"Ошибка при редактировании сообщения: {edit_error}")
+            # В случае ошибки редактирования, пробуем отправить новое сообщение
+            try:
+                await callback_query.message.delete()
+            except:
+                pass
+                
+            await client.send_message(
+                callback_query.from_user.id,
+                admin_text,
+                reply_markup=keyboard
+            )
+            logger.info("Отправлено новое сообщение с панелью администратора")
     
-    admin_text = "🔧 Панель администратора:\n\nВыберите действие:"
-    
-    # Получаем текущий статус автодобавления
-    auto_add_enabled = get_setting("auto_add_enabled", "true").lower() == "true"
-    auto_add_button_text = "🔴 Отключить автодобавление" if auto_add_enabled else "🟢 Включить автодобавление"
-    auto_add_callback = "toggle_auto_add_off" if auto_add_enabled else "toggle_auto_add_on"
-    
-    keyboard = types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
-        [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
-        [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
-        [types.InlineKeyboardButton("⚠️ Пользователи с ограничениями", callback_data="admin_rate_limited_users")],
-        [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
-        [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
-        [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
-        [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
-        [types.InlineKeyboardButton("📱 Управление аккаунтами", callback_data="admin_manage_accounts")],
-        [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
-        [types.InlineKeyboardButton("➖ Удалить админ-аккаунт", callback_data="admin_remove_account")]
-    ])
-    
-    await callback_query.edit_message_text(admin_text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при возврате в панель администратора: {e}")
+        try:
+            await callback_query.answer("Произошла ошибка. Пожалуйста, используйте команду /admin")
+        except:
+            pass
 
 @bot.on_callback_query(filters.regex(r"^toggle_auto_add_on$"))
 async def toggle_auto_add_on_callback(client, callback_query):
@@ -2943,7 +2973,8 @@ async def admin_manage_accounts_callback(client, callback_query):
             buttons.append([types.InlineKeyboardButton(button_text, callback_data=callback_data)])
         
         # Кнопка для переключения на другой аккаунт
-        if len(accounts) > 1:
+        active_accounts = [a for a in accounts if a.active]
+        if len(active_accounts) > 1:
             buttons.append([types.InlineKeyboardButton("🔄 Переключиться на другой аккаунт", callback_data="switch_active_account")])
         
         # Кнопки для добавления и выхода
@@ -2956,6 +2987,9 @@ async def admin_manage_accounts_callback(client, callback_query):
             logger.info("Отправляем сообщение со списком аккаунтов")
             await callback_query.edit_message_text(accounts_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
             logger.info("Сообщение успешно отправлено")
+        except errors.MessageNotModified:
+            logger.warning("Сообщение не было изменено (уже содержит актуальную информацию)")
+            await callback_query.answer("Список аккаунтов актуален")
         except Exception as msg_error:
             logger.error(f"Ошибка при отправке сообщения: {msg_error}")
             
@@ -2984,6 +3018,7 @@ async def admin_manage_accounts_callback(client, callback_query):
                     )
                 except Exception as final_err:
                     logger.error(f"Критическая ошибка при отправке сообщения: {final_err}")
+                    await callback_query.answer("Не удалось обновить список аккаунтов")
         
     except Exception as e:
         logger.error(f"Ошибка при получении списка аккаунтов администраторов: {e}")
@@ -3004,7 +3039,8 @@ async def admin_manage_accounts_callback(client, callback_query):
             except:
                 pass
     finally:
-        session.close()
+        if 'session' in locals():
+            session.close()
 
 @bot.on_callback_query(filters.regex(r"^activate_account_(\d+)$"))
 async def activate_account_callback(client, callback_query):
@@ -3012,6 +3048,9 @@ async def activate_account_callback(client, callback_query):
     Активация аккаунта администратора
     """
     try:
+        logger.info(f"Вызвана функция activate_account_callback, data: {callback_query.data}")
+        await callback_query.answer("Активация аккаунта...")
+        
         account_id = int(callback_query.data.split("_")[-1])
         logger.info(f"Запрошена активация аккаунта с ID {account_id}")
         
@@ -3070,6 +3109,9 @@ async def deactivate_account_callback(client, callback_query):
     Деактивация аккаунта администратора
     """
     try:
+        logger.info(f"Вызвана функция deactivate_account_callback, data: {callback_query.data}")
+        await callback_query.answer("Деактивация аккаунта...")
+        
         account_id = int(callback_query.data.split("_")[-1])
         logger.info(f"Запрошена деактивация аккаунта с ID {account_id}")
         
@@ -3094,6 +3136,7 @@ async def deactivate_account_callback(client, callback_query):
         if active_accounts_count <= 1:
             logger.warning(f"Попытка деактивации последнего активного аккаунта {account.phone}")
             await callback_query.answer("Нельзя деактивировать последний активный аккаунт")
+            await admin_manage_accounts_callback(client, callback_query)
             return
         
         # Деактивируем аккаунт
@@ -3134,15 +3177,22 @@ async def switch_active_account_callback(client, callback_query):
     Меню выбора активного аккаунта администратора
     """
     try:
+        logger.info(f"Вызвана функция switch_active_account_callback, data: {callback_query.data}")
+        await callback_query.answer("Загрузка списка аккаунтов...")
+        
         session = get_session()
         active_accounts = session.query(AdminAccount).filter_by(active=True).all()
         
         if not active_accounts:
+            logger.warning("Нет активных аккаунтов для переключения")
             await callback_query.answer("Нет активных аккаунтов")
+            await admin_manage_accounts_callback(client, callback_query)
             return
         
         if len(active_accounts) == 1:
+            logger.warning("Найден только один активный аккаунт, переключение невозможно")
             await callback_query.answer("Есть только один активный аккаунт")
+            await admin_manage_accounts_callback(client, callback_query)
             return
         
         # Создаем текст с информацией
@@ -3153,6 +3203,7 @@ async def switch_active_account_callback(client, callback_query):
         global active_admin_client
         if active_admin_client and hasattr(active_admin_client, "_phone"):
             current_active = active_admin_client._phone
+            switch_text += f"Текущий активный: {current_active}\n\n"
         
         # Создаем кнопки для каждого активного аккаунта
         buttons = []
@@ -3174,9 +3225,14 @@ async def switch_active_account_callback(client, callback_query):
         
     except Exception as e:
         logger.error(f"Ошибка при отображении меню выбора аккаунта: {e}")
-        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+        await callback_query.answer(f"Произошла ошибка при загрузке списка аккаунтов")
+        try:
+            await admin_manage_accounts_callback(client, callback_query)
+        except Exception as callback_err:
+            logger.error(f"Не удалось вернуться в меню управления аккаунтами: {callback_err}")
     finally:
-        session.close()
+        if 'session' in locals():
+            session.close()
 
 @bot.on_callback_query(filters.regex(r"^use_account_(\d+)$"))
 async def use_account_callback(client, callback_query):
@@ -3184,6 +3240,9 @@ async def use_account_callback(client, callback_query):
     Переключение на выбранный аккаунт администратора
     """
     try:
+        logger.info(f"Вызвана функция use_account_callback, data: {callback_query.data}")
+        await callback_query.answer("Переключение аккаунта...")
+        
         account_id = int(callback_query.data.split("_")[-1])
         logger.info(f"Запрошено переключение на аккаунт с ID {account_id}")
         
@@ -3194,11 +3253,13 @@ async def use_account_callback(client, callback_query):
         if not account:
             logger.error(f"Аккаунт с ID {account_id} не найден в базе данных")
             await callback_query.answer("Аккаунт не найден")
+            await admin_manage_accounts_callback(client, callback_query)
             return
         
         if not account.active:
             logger.warning(f"Попытка переключения на неактивный аккаунт {account.phone}")
             await callback_query.answer("Невозможно использовать неактивный аккаунт")
+            await admin_manage_accounts_callback(client, callback_query)
             return
         
         # Останавливаем текущий клиент, если он есть
@@ -3211,15 +3272,13 @@ async def use_account_callback(client, callback_query):
                 
                 logger.info(f"Останавливаем текущий клиент для аккаунта {current_phone}")
                 await active_admin_client.stop()
+                logger.info(f"Текущий клиент успешно остановлен")
             except Exception as e:
                 logger.error(f"Ошибка при остановке клиента: {e}")
             active_admin_client = None
         
         # Очищаем глобальную переменную
         active_admin_client = None
-        
-        # Отправляем уведомление о переключении
-        await callback_query.answer(f"Переключение на аккаунт {account.phone}...")
         
         # Принудительно запускаем get_admin_client() для использования выбранного аккаунта
         # Сначала установим счетчик использований на минимальное значение
@@ -3264,7 +3323,7 @@ async def use_account_callback(client, callback_query):
         
     except Exception as e:
         logger.error(f"Ошибка при переключении на выбранный аккаунт: {e}")
-        await callback_query.answer(f"Произошла ошибка")
+        await callback_query.answer(f"Произошла ошибка при переключении аккаунта")
         
         try:
             await admin_manage_accounts_callback(client, callback_query)

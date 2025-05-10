@@ -703,11 +703,11 @@ async def admin_command(client, message):
 @bot.on_callback_query(filters.regex(r"^admin_users$"))
 async def admin_users_callback(client, callback_query):
     """
-    Список пользователей через клавиатуру
+    Список пользователей с полной информацией
     """
     session = get_session()
     try:
-        users = session.query(User).order_by(User.registration_date.desc()).limit(20).all()
+        users = session.query(User).order_by(User.registration_date.desc()).limit(10).all()
         
         if not users:
             await callback_query.edit_message_text("Список пользователей пуст.")
@@ -715,36 +715,92 @@ async def admin_users_callback(client, callback_query):
         
         users_text = "👥 Список последних пользователей:\n\n"
         
-        keyboard = []
-        
         for i, user_db in enumerate(users):
-            username = f"@{user_db.username}" if user_db.username else "нет"
-            status = "🚫 Заблокирован" if user_db.is_blacklisted else "✅ Активен"
-            chat = f"Чат #{1 if user_db.chat_joined == CHAT_ID_1 else 2}" if user_db.chat_joined else "Не в чате"
-            
-            # Базовая информация о пользователе
-            users_text += f"{i+1}. <b>{user_db.first_name} {user_db.last_name or ''}</b> ({username})\n"
-            users_text += f"ID: <code>{user_db.user_id}</code> | {status} | {chat}\n\n"
-            
-            # Добавляем кнопку для просмотра детальной информации
-            keyboard.append([types.InlineKeyboardButton(
-                f"📋 Подробнее о {user_db.first_name}", 
-                callback_data=f"user_details_{user_db.user_id}"
-            )])
-            
-            # Логируем callback_data для отладки
-            logger.info(f"Создана кнопка 'Подробнее' с callback_data: user_details_{user_db.user_id}")
+            try:
+                # Получаем информацию о пользователе через API
+                user_info = await client.get_users(user_db.user_id)
+                
+                # Базовая информация
+                username = f"@{user_db.username}" if user_db.username else "нет"
+                status = "🚫 Заблокирован" if user_db.is_blacklisted else "✅ Активен"
+                chat = f"Чат #{1 if user_db.chat_joined == CHAT_ID_1 else 2}" if user_db.chat_joined else "Не в чате"
+                
+                # Дополнительная информация
+                premium_status = "✅" if hasattr(user_info, "is_premium") and user_info.is_premium else "❌"
+                language_code = user_info.language_code or "неизвестно"
+                is_bot = "✅" if hasattr(user_info, "is_bot") and user_info.is_bot else "❌"
+                is_fake = "✅" if hasattr(user_info, "is_fake") and user_info.is_fake else "❌"
+                is_scam = "✅" if hasattr(user_info, "is_scam") and user_info.is_scam else "❌"
+                
+                # Получаем заявки пользователя
+                join_requests = session.query(JoinRequest).filter_by(user_id=user_db.user_id).order_by(JoinRequest.created_at.desc()).limit(3).all()
+                
+                # Вся информация в одном сообщении
+                users_text += f"{i+1}. <b>{user_db.first_name} {user_db.last_name or ''}</b> ({username})\n"
+                users_text += f"ID: <code>{user_db.user_id}</code> | {status} | {chat}\n"
+                users_text += f"Регистрация: {user_db.registration_date.strftime('%d.%m.%Y %H:%M')}\n"
+                users_text += f"Premium: {premium_status} | Язык: {language_code}\n"
+                users_text += f"Бот: {is_bot} | Фейк: {is_fake} | Скам: {is_scam}\n"
+                
+                if join_requests:
+                    users_text += "История заявок:\n"
+                    for req in join_requests:
+                        chat_name = "Чат #1" if req.chat_id == CHAT_ID_1 else "Чат #2"
+                        
+                        if req.status == "approved":
+                            status_emoji = "✅"
+                            status_text = "Одобрена"
+                        elif req.status == "rejected":
+                            status_emoji = "❌"
+                            status_text = "Отклонена"
+                        elif req.status == "link_sent":
+                            status_emoji = "🔗"
+                            status_text = "Отправлена инструкция"
+                        elif req.status == "manual_check":
+                            status_emoji = "👨‍💼"
+                            status_text = "Ожидает ручного добавления"
+                        elif req.status == "pending":
+                            status_emoji = "⏳"
+                            status_text = "Обрабатывается"
+                        else:
+                            status_emoji = "❓"
+                            status_text = req.status
+                        
+                        users_text += f"- {status_emoji} {chat_name}: {status_text} ({req.created_at.strftime('%d.%m.%Y %H:%M')})\n"
+                
+                # Добавляем блокировку/разблокировку через команды
+                users_text += f"Команды: /block {user_db.user_id} | /unblock {user_db.user_id}\n\n"
+                
+            except Exception as user_err:
+                logger.error(f"Ошибка при получении информации о пользователе {user_db.user_id}: {user_err}")
+                users_text += f"{i+1}. <b>{user_db.first_name} {user_db.last_name or ''}</b>\n"
+                users_text += f"ID: <code>{user_db.user_id}</code> | Ошибка получения данных\n"
+                users_text += f"Команды: /block {user_db.user_id} | /unblock {user_db.user_id}\n\n"
         
         # Добавляем кнопку назад
-        keyboard.append([types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")])
+        keyboard = types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+        ])
         
-        # Создаем клавиатуру с кнопками
-        reply_markup = types.InlineKeyboardMarkup(keyboard)
-        
-        await callback_query.edit_message_text(users_text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+        # Разбиваем текст, если слишком длинный
+        max_length = 4000  # Примерный максимум сообщения в Telegram
+        if len(users_text) > max_length:
+            chunks = [users_text[i:i+max_length] for i in range(0, len(users_text), max_length)]
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await callback_query.edit_message_text(chunk, reply_markup=None, parse_mode=enums.ParseMode.HTML)
+                else:
+                    await client.send_message(
+                        callback_query.from_user.id, 
+                        chunk, 
+                        reply_markup=keyboard if i == len(chunks)-1 else None,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+        else:
+            await callback_query.edit_message_text(users_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         logger.error(f"Ошибка при получении списка пользователей: {e}")
-        await callback_query.edit_message_text("Произошла ошибка при получении списка пользователей.")
+        await callback_query.edit_message_text(f"Произошла ошибка при получении списка пользователей: {str(e)}")
     finally:
         session.close()
 
@@ -1069,7 +1125,7 @@ async def check_pending_manual_requests():
                 user_id = request.user_id
                 chat_id = request.chat_id
                 
-                # Получаем информацию о пользователе
+            # Получаем информацию о пользователе
                 user_info = await bot.get_users(user_id)
                 
                 # Собираем дополнительную информацию о пользователе

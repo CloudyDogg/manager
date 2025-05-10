@@ -152,16 +152,44 @@ async def add_user_to_chat(user_id, chat_id):
     chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
     
     try:
-        # Преобразуем ID чата в правильный формат для Pyrogram
-        supergroup_id = convert_to_supergroup_id(chat_id)
-        logger.info(f"Преобразован ID чата из {chat_id} в {supergroup_id}")
+        # Получаем список всех чатов для админа
+        logger.info("Получаем список чатов")
+        dialogs = []
+        async for dialog in admin_client.get_dialogs():
+            dialogs.append(dialog)
+            logger.info(f"Найден чат: {dialog.chat.title or dialog.chat.first_name} (ID: {dialog.chat.id})")
+        
+        # Ищем подходящий чат среди всех диалогов
+        target_chat = None
+        for dialog in dialogs:
+            if dialog.chat and dialog.chat.id:
+                # Проверяем, подходит ли этот чат по ID
+                str_dialog_id = str(dialog.chat.id)
+                str_chat_id = str(chat_id)
+                
+                # Удаляем -100 из начала ID, если они есть, для сравнения
+                if str_dialog_id.startswith('-100'):
+                    str_dialog_id = str_dialog_id[4:]
+                if str_chat_id.startswith('-100'):
+                    str_chat_id = str_chat_id[4:]
+                    
+                # Если ID совпадают после обработки
+                if str_dialog_id == str_chat_id or dialog.chat.id == chat_id:
+                    target_chat = dialog.chat
+                    logger.info(f"Найден нужный чат: {dialog.chat.title or 'Без названия'} (ID: {dialog.chat.id})")
+                    break
+        
+        if not target_chat:
+            logger.error(f"Не удалось найти чат для ID {chat_id}")
+            return False, "Не удалось найти чат для добавления пользователя"
         
         try:
-            # Добавляем пользователя напрямую по ID чата
-            logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {supergroup_id}")
+            # Добавляем пользователя напрямую
+            logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {target_chat.id}")
             
+            # Используем метод add_chat_members для добавления пользователя
             await admin_client.add_chat_members(
-                chat_id=supergroup_id,
+                chat_id=target_chat.id,
                 user_ids=user_id
             )
             
@@ -192,8 +220,9 @@ async def add_user_to_chat(user_id, chat_id):
             logger.warning(f"Пользователь {user_id} не может быть добавлен из-за настроек приватности")
             
             # Если не удалось добавить из-за настроек приватности, отправляем ссылку
+            chat_info = await admin_client.get_chat(target_chat.id)
             invite_link = await admin_client.create_chat_invite_link(
-                chat_id=supergroup_id,
+                chat_id=target_chat.id,
                 creates_join_request=False
             )
             invite_link_url = invite_link.invite_link

@@ -156,19 +156,38 @@ async def add_user_to_chat(user_id, chat_id):
                 logger.info(f"Найден нужный чат: {dialog.chat.title} (ID: {dialog.chat.id})")
                 break
         
+        invite_link_url = None
+        
         if target_chat:
-            # Успешно нашли чат, создаем ссылку
-            invite_link = await admin_client.create_chat_invite_link(
-                chat_id=target_chat.id,
-                member_limit=1,  # Ограничение на одного пользователя
-                creates_join_request=False
-            )
-            invite_link_url = invite_link.invite_link
-            logger.info(f"Создана одноразовая ссылка: {invite_link_url}")
+            # Пробуем использовать существующую ссылку для чата
+            try:
+                chat_info = await admin_client.get_chat(target_chat.id)
+                if hasattr(chat_info, 'invite_link') and chat_info.invite_link:
+                    # Используем существующую публичную ссылку
+                    invite_link_url = chat_info.invite_link
+                    logger.info(f"Используем существующую ссылку чата: {invite_link_url}")
+                else:
+                    # Создаем постоянную ссылку для чата без ограничений
+                    invite_link = await admin_client.create_chat_invite_link(
+                        chat_id=target_chat.id,
+                        creates_join_request=False
+                    )
+                    invite_link_url = invite_link.invite_link
+                    logger.info(f"Создана новая постоянная ссылка: {invite_link_url}")
+            except Exception as e:
+                logger.error(f"Ошибка при получении/создании ссылки: {e}")
+                # Используем запасную ссылку в случае ошибки
+                invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
+                logger.warning(f"Используем запасную ссылку: {invite_link_url}")
         else:
             # Не нашли чат, используем статическую ссылку
             invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
             logger.warning(f"Не нашли чат, используем запасную ссылку: {invite_link_url}")
+        
+        # Проверяем, есть ли ссылка
+        if not invite_link_url:
+            logger.error(f"Не удалось получить действительную ссылку на чат")
+            return False, "Не удалось создать ссылку для присоединения к чату"
         
         # Отправляем пользователю ссылку
         await bot.send_message(

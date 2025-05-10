@@ -12,6 +12,7 @@ from cryptography.fernet import Fernet
 import json
 from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine, RateLimitBlock, check_rate_limit, block_user_rate_limit, unblock_user_rate_limit, get_rate_limited_users
 import re
+import html
 
 # Настройка логирования
 logging.basicConfig(
@@ -78,6 +79,10 @@ async def get_admin_client():
     # Если клиент существует, но не активен, пытаемся остановить его
     if active_admin_client:
         try:
+            current_phone = "неизвестно"
+            if hasattr(active_admin_client, "_phone"):
+                current_phone = active_admin_client._phone
+            logger.info(f"Останавливаем неактивный клиент для аккаунта {current_phone}")
             await active_admin_client.stop()
         except Exception as e:
             logger.error(f"Ошибка при остановке клиента: {e}")
@@ -97,36 +102,62 @@ async def get_admin_client():
         # Расшифровываем данные сессии
         try:
             session_data = decrypt_session(admin_account.session_data)
+            if not session_data:
+                logger.error(f"Не удалось расшифровать данные сессии для аккаунта {admin_account.phone}")
+                # Деактивируем проблемный аккаунт
+                admin_account.active = False
+                session.commit()
+                logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за ошибки расшифровки")
+                return None
+                
             session_string = session_data.get("session_string")
             
             if not session_string:
                 logger.error("Нет строки сессии в данных аккаунта")
+                # Деактивируем проблемный аккаунт
+                admin_account.active = False
+                session.commit()
+                logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за отсутствия строки сессии")
                 return None
                 
             # Создаем клиент из строки сессии
+            logger.info(f"Создаем клиент для аккаунта {admin_account.phone}")
             client = Client(
-                name="admin",
+                name=f"admin_{admin_account.phone}",  # Уникальное имя для каждого клиента
                 api_id=API_ID,
                 api_hash=API_HASH,
                 session_string=session_string,
                 in_memory=True
             )
             
-            # Запускаем клиент
-            await client.start()
-            logger.info("Клиент администратора запущен успешно")
+            # Устанавливаем атрибут телефона для удобства идентификации
+            client._phone = admin_account.phone
             
-            # Получаем информацию о самом себе для проверки
-            me = await client.get_me()
-            logger.info(f"Авторизован как: {me.first_name} {me.last_name or ''} (@{me.username or 'нет'})")
-            
-            # Обновляем статистику использования
-            admin_account.last_used = datetime.now()
-            admin_account.usage_count += 1
-            session.commit()
-            
-            active_admin_client = client
-            return client
+            try:
+                # Запускаем клиент
+                logger.info(f"Запускаем клиент для аккаунта {admin_account.phone}")
+                await client.start()
+                logger.info("Клиент администратора запущен успешно")
+                
+                # Получаем информацию о самом себе для проверки
+                me = await client.get_me()
+                logger.info(f"Авторизован как: {me.first_name} {me.last_name or ''} (@{me.username or 'нет'})")
+                
+                # Обновляем статистику использования
+                admin_account.last_used = datetime.now()
+                admin_account.usage_count += 1
+                session.commit()
+                
+                active_admin_client = client
+                return client
+            except Exception as client_err:
+                logger.error(f"Ошибка при запуске клиента для аккаунта {admin_account.phone}: {client_err}")
+                # Деактивируем проблемный аккаунт
+                admin_account.active = False
+                session.commit()
+                logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за ошибки запуска клиента")
+                return None
+                
         except Exception as e:
             logger.error(f"Ошибка при инициализации клиента: {e}")
             # Деактивируем проблемный аккаунт
@@ -137,6 +168,52 @@ async def get_admin_client():
     except Exception as e:
         logger.error(f"Ошибка при получении клиента администратора: {e}")
         return None
+    finally:
+        session.close()
+
+async def switch_to_next_admin():
+    """
+    Переключение на следующий доступный аккаунт администратора
+    """
+    global active_admin_client
+    
+    # Останавливаем текущий клиент, если он есть
+    if active_admin_client:
+        try:
+            current_phone = None
+            if hasattr(active_admin_client, "_phone"):
+                current_phone = active_admin_client._phone
+                
+            logger.info(f"Переключение с текущего аккаунта администратора: {current_phone}")
+            
+            await active_admin_client.stop()
+        except Exception as e:
+            logger.error(f"Ошибка при остановке клиента: {e}")
+        active_admin_client = None
+    
+    session = get_session()
+    try:
+        # Получаем все активные аккаунты админов
+        active_accounts = session.query(AdminAccount).filter_by(active=True).order_by(AdminAccount.usage_count).all()
+        
+        if not active_accounts:
+            logger.error("Нет доступных аккаунтов администраторов для переключения")
+            return False
+        
+        # Выбираем аккаунт с наименьшим количеством использований
+        next_account = active_accounts[0]
+        
+        logger.info(f"Переключение на аккаунт: {next_account.phone} (использований: {next_account.usage_count})")
+        
+        # Устанавливаем счетчик использований заново
+        active_admin_client = None
+        
+        # При следующем вызове get_admin_client() будет выбран новый аккаунт
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при переключении на следующий аккаунт: {e}")
+        return False
     finally:
         session.close()
 
@@ -384,7 +461,89 @@ async def add_user_to_chat(user_id, chat_id):
                 logger.error(f"Ошибка при деактивации аккаунта: {e}")
             finally:
                 session.close()
+            
+            # Пробуем переключиться на другой аккаунт
+            logger.info("Пробуем переключиться на другой аккаунт администратора")
+            switched = await switch_to_next_admin()
+            
+            if switched:
+                logger.info("Успешно переключились на другой аккаунт, пробуем добавить пользователя снова")
                 
+                # Получаем новый клиент
+                new_admin_client = await get_admin_client()
+                if new_admin_client:
+                    logger.info("Получен новый клиент администратора")
+                    
+                    # Пробуем добавить пользователя еще раз
+                    try:
+                        # Получаем информацию о пользователе
+                        user_info = await new_admin_client.get_users(user_id)
+                        logger.info(f"Получена информация о пользователе: {user_info.first_name} {user_info.last_name or ''}")
+                        
+                        # Получаем целевой чат
+                        dialogs = []
+                        async for dialog in new_admin_client.get_dialogs():
+                            dialogs.append(dialog)
+                            
+                        target_chat = None
+                        for dialog in dialogs:
+                            if dialog.chat.title == "test":
+                                target_chat = dialog.chat
+                                logger.info(f"Найден нужный чат: {dialog.chat.title} (ID: {dialog.chat.id})")
+                                break
+                        
+                        if target_chat:
+                            # Пробуем использовать resolve_peer перед добавлением
+                            try:
+                                await new_admin_client.resolve_peer(user_id)
+                                logger.info(f"Успешно вызван resolve_peer для пользователя {user_id}")
+                            except Exception as resolve_err:
+                                logger.error(f"Ошибка при вызове resolve_peer: {resolve_err}")
+                            
+                            # Добавляем пользователя
+                            result = await new_admin_client.add_chat_members(
+                                chat_id=target_chat.id,
+                                user_ids=user_id
+                            )
+                            logger.info(f"Результат вызова add_chat_members: {result}")
+                            
+                            # Проверяем успешность добавления
+                            await asyncio.sleep(1)
+                            
+                            chat_members = []
+                            async for member in new_admin_client.get_chat_members(target_chat.id):
+                                chat_members.append(member.user.id)
+                            
+                            if user_id in chat_members:
+                                logger.info(f"Пользователь {user_id} успешно добавлен в чат после переключения аккаунта")
+                                
+                                # Отправляем уведомление об успешном добавлении
+                                await bot.send_message(
+                                    user_id,
+                                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                                    f"Можете открыть чат в своем приложении Telegram."
+                                )
+                                
+                                # Обновляем статус заявки
+                                session = get_session()
+                                try:
+                                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                    if join_request:
+                                        join_request.status = "approved"
+                                        join_request.approved_by = 0
+                                        join_request.approved_at = datetime.now()
+                                        session.commit()
+                                except Exception as e:
+                                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                                finally:
+                                    session.close()
+                                
+                                return True, "Пользователь успешно добавлен в чат после переключения аккаунта"
+                            else:
+                                logger.warning(f"Пользователь {user_id} не найден в списке участников чата после переключения аккаунта")
+                    except Exception as retry_error:
+                        logger.error(f"Ошибка при повторной попытке добавления после переключения аккаунта: {retry_error}")
+            
             return False, "Достигнут лимит добавлений. Попробуйте позже."
             
         except Exception as e:
@@ -2709,8 +2868,14 @@ async def admin_manage_accounts_callback(client, callback_query):
     Просмотр и управление админ-аккаунтами
     """
     try:
+        # Сначала выводим отладочное сообщение, чтобы убедиться, что функция вызывается
+        logger.info(f"Вызвана функция admin_manage_accounts_callback, callback_data: {callback_query.data}")
+        await callback_query.answer("Загружаем список аккаунтов...")
+        
         session = get_session()
         accounts = session.query(AdminAccount).all()
+        
+        logger.info(f"Найдено {len(accounts)} аккаунтов администраторов")
         
         if not accounts:
             keyboard = types.InlineKeyboardMarkup([
@@ -2734,15 +2899,31 @@ async def admin_manage_accounts_callback(client, callback_query):
             active_phone = active_admin_client._phone
             active_account = next((a for a in accounts if a.phone == active_phone), None)
         
+        # Безопасное отображение HTML
+        def safe_html(text):
+            if text is None:
+                return ""
+            return html.escape(str(text))
+        
         for i, account in enumerate(accounts):
             # Форматируем информацию об аккаунте
             status = "✅ Активен" if account.active else "❌ Отключен"
             current = "👉 Текущий" if active_account and account.phone == active_account.phone else ""
             
-            accounts_text += f"{i+1}. <b>Телефон:</b> {account.phone}\n"
+            accounts_text += f"{i+1}. <b>Телефон:</b> {safe_html(account.phone)}\n"
             accounts_text += f"   <b>Статус:</b> {status} {current}\n"
             accounts_text += f"   <b>Использований:</b> {account.usage_count}\n"
-            accounts_text += f"   <b>Последнее использование:</b> {account.last_used.strftime('%d.%m.%Y %H:%M') if account.last_used else 'Никогда'}\n\n"
+            
+            # Безопасное отображение даты последнего использования
+            last_used = "Никогда"
+            if account.last_used:
+                try:
+                    last_used = account.last_used.strftime('%d.%m.%Y %H:%M')
+                except Exception as date_err:
+                    logger.error(f"Ошибка форматирования даты: {date_err}")
+                    last_used = "Ошибка даты"
+            
+            accounts_text += f"   <b>Последнее использование:</b> {last_used}\n\n"
         
         # Создаем кнопки для управления аккаунтами
         buttons = []
@@ -2750,11 +2931,13 @@ async def admin_manage_accounts_callback(client, callback_query):
         # Добавляем кнопку для каждого аккаунта
         for account in accounts:
             # Формируем текст кнопки в зависимости от статуса
+            phone_display = account.phone if len(account.phone) <= 12 else f"{account.phone[:9]}..."
+            
             if not account.active:
-                button_text = f"🔄 Активировать {account.phone}"
+                button_text = f"🔄 Активировать {phone_display}"
                 callback_data = f"activate_account_{account.id}"
             else:
-                button_text = f"🛑 Деактивировать {account.phone}"
+                button_text = f"🛑 Деактивировать {phone_display}"
                 callback_data = f"deactivate_account_{account.id}"
             
             buttons.append([types.InlineKeyboardButton(button_text, callback_data=callback_data)])
@@ -2769,7 +2952,38 @@ async def admin_manage_accounts_callback(client, callback_query):
         
         keyboard = types.InlineKeyboardMarkup(buttons)
         
-        await callback_query.edit_message_text(accounts_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
+        try:
+            logger.info("Отправляем сообщение со списком аккаунтов")
+            await callback_query.edit_message_text(accounts_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
+            logger.info("Сообщение успешно отправлено")
+        except Exception as msg_error:
+            logger.error(f"Ошибка при отправке сообщения: {msg_error}")
+            
+            # Поотладочно выведем длину сообщения
+            logger.error(f"Длина сообщения: {len(accounts_text)} символов")
+            
+            # Попробуем более простое сообщение без HTML
+            simple_text = f"📱 Список аккаунтов администраторов\n\nНайдено {len(accounts)} аккаунтов"
+            try:
+                await callback_query.edit_message_text(
+                    simple_text,
+                    reply_markup=types.InlineKeyboardMarkup([
+                        [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+                    ])
+                )
+                logger.info("Отправлено упрощенное сообщение без HTML")
+            except Exception as simple_err:
+                logger.error(f"Ошибка при отправке простого сообщения: {simple_err}")
+                # Попробуем отправить еще более простое сообщение
+                try:
+                    await callback_query.edit_message_text(
+                        "Ошибка при загрузке списка аккаунтов",
+                        reply_markup=types.InlineKeyboardMarkup([
+                            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+                        ])
+                    )
+                except Exception as final_err:
+                    logger.error(f"Критическая ошибка при отправке сообщения: {final_err}")
         
     except Exception as e:
         logger.error(f"Ошибка при получении списка аккаунтов администраторов: {e}")
@@ -2778,10 +2992,17 @@ async def admin_manage_accounts_callback(client, callback_query):
             [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
         ])
         
-        await callback_query.edit_message_text(
-            f"❌ Произошла ошибка при получении списка аккаунтов: {str(e)[:200]}",
-            reply_markup=keyboard
-        )
+        try:
+            await callback_query.edit_message_text(
+                f"❌ Произошла ошибка при получении списка аккаунтов",
+                reply_markup=keyboard
+            )
+        except Exception as err:
+            logger.error(f"Не удалось отправить сообщение об ошибке: {err}")
+            try:
+                await callback_query.answer("Произошла ошибка при загрузке списка аккаунтов")
+            except:
+                pass
     finally:
         session.close()
 
@@ -2792,17 +3013,40 @@ async def activate_account_callback(client, callback_query):
     """
     try:
         account_id = int(callback_query.data.split("_")[-1])
+        logger.info(f"Запрошена активация аккаунта с ID {account_id}")
         
         session = get_session()
         account = session.query(AdminAccount).filter_by(id=account_id).first()
         
         if not account:
+            logger.error(f"Аккаунт с ID {account_id} не найден")
             await callback_query.answer("Аккаунт не найден")
+            return
+        
+        # Проверяем, что аккаунт действительно неактивен
+        if account.active:
+            logger.warning(f"Попытка активации уже активного аккаунта {account.phone}")
+            await callback_query.answer(f"Аккаунт {account.phone} уже активен")
+            await admin_manage_accounts_callback(client, callback_query)
+            return
+        
+        # Проверяем валидность данных сессии перед активацией
+        logger.info(f"Проверка данных сессии для аккаунта {account.phone}")
+        try:
+            session_data = decrypt_session(account.session_data)
+            if not session_data or not session_data.get("session_string"):
+                logger.error(f"Неверные данные сессии для аккаунта {account.phone}")
+                await callback_query.answer(f"Ошибка: неверные данные сессии для аккаунта {account.phone}")
+                return
+        except Exception as decrypt_error:
+            logger.error(f"Ошибка при расшифровке данных сессии: {decrypt_error}")
+            await callback_query.answer("Ошибка при проверке данных сессии")
             return
         
         # Активируем аккаунт
         account.active = True
         session.commit()
+        logger.info(f"Аккаунт {account.phone} успешно активирован")
         
         await callback_query.answer(f"Аккаунт {account.phone} активирован")
         
@@ -2811,9 +3055,14 @@ async def activate_account_callback(client, callback_query):
         
     except Exception as e:
         logger.error(f"Ошибка при активации аккаунта: {e}")
-        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+        await callback_query.answer("Произошла ошибка при активации аккаунта")
+        try:
+            await admin_manage_accounts_callback(client, callback_query)
+        except Exception as callback_err:
+            logger.error(f"Не удалось вернуться в меню управления аккаунтами: {callback_err}")
     finally:
-        session.close()
+        if 'session' in locals():
+            session.close()
 
 @bot.on_callback_query(filters.regex(r"^deactivate_account_(\d+)$"))
 async def deactivate_account_callback(client, callback_query):
@@ -2822,32 +3071,45 @@ async def deactivate_account_callback(client, callback_query):
     """
     try:
         account_id = int(callback_query.data.split("_")[-1])
+        logger.info(f"Запрошена деактивация аккаунта с ID {account_id}")
         
         session = get_session()
         account = session.query(AdminAccount).filter_by(id=account_id).first()
         
         if not account:
+            logger.error(f"Аккаунт с ID {account_id} не найден")
             await callback_query.answer("Аккаунт не найден")
+            return
+        
+        # Проверяем, что аккаунт действительно активен
+        if not account.active:
+            logger.warning(f"Попытка деактивации уже неактивного аккаунта {account.phone}")
+            await callback_query.answer(f"Аккаунт {account.phone} уже неактивен")
+            await admin_manage_accounts_callback(client, callback_query)
             return
         
         # Проверяем, не является ли этот аккаунт последним активным
         active_accounts_count = session.query(AdminAccount).filter_by(active=True).count()
         
-        if active_accounts_count <= 1 and account.active:
+        if active_accounts_count <= 1:
+            logger.warning(f"Попытка деактивации последнего активного аккаунта {account.phone}")
             await callback_query.answer("Нельзя деактивировать последний активный аккаунт")
             return
         
         # Деактивируем аккаунт
         account.active = False
         session.commit()
+        logger.info(f"Аккаунт {account.phone} успешно деактивирован")
         
         await callback_query.answer(f"Аккаунт {account.phone} деактивирован")
         
         # Если деактивируемый аккаунт является текущим активным, сбрасываем его
         global active_admin_client
         if active_admin_client and hasattr(active_admin_client, "_phone") and active_admin_client._phone == account.phone:
+            logger.info(f"Деактивирован текущий активный аккаунт {account.phone}, останавливаем клиент")
             try:
                 await active_admin_client.stop()
+                logger.info(f"Клиент для аккаунта {account.phone} успешно остановлен")
             except Exception as e:
                 logger.error(f"Ошибка при остановке клиента: {e}")
             active_admin_client = None
@@ -2857,9 +3119,14 @@ async def deactivate_account_callback(client, callback_query):
         
     except Exception as e:
         logger.error(f"Ошибка при деактивации аккаунта: {e}")
-        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
+        await callback_query.answer("Произошла ошибка при деактивации аккаунта")
+        try:
+            await admin_manage_accounts_callback(client, callback_query)
+        except Exception as callback_err:
+            logger.error(f"Не удалось вернуться в меню управления аккаунтами: {callback_err}")
     finally:
-        session.close()
+        if 'session' in locals():
+            session.close()
 
 @bot.on_callback_query(filters.regex(r"^switch_active_account$"))
 async def switch_active_account_callback(client, callback_query):
@@ -2918,11 +3185,31 @@ async def use_account_callback(client, callback_query):
     """
     try:
         account_id = int(callback_query.data.split("_")[-1])
+        logger.info(f"Запрошено переключение на аккаунт с ID {account_id}")
+        
+        # Получаем информацию о выбранном аккаунте
+        session = get_session()
+        account = session.query(AdminAccount).filter_by(id=account_id).first()
+        
+        if not account:
+            logger.error(f"Аккаунт с ID {account_id} не найден в базе данных")
+            await callback_query.answer("Аккаунт не найден")
+            return
+        
+        if not account.active:
+            logger.warning(f"Попытка переключения на неактивный аккаунт {account.phone}")
+            await callback_query.answer("Невозможно использовать неактивный аккаунт")
+            return
         
         # Останавливаем текущий клиент, если он есть
         global active_admin_client
         if active_admin_client and active_admin_client.is_connected:
             try:
+                current_phone = "неизвестно"
+                if hasattr(active_admin_client, "_phone"):
+                    current_phone = active_admin_client._phone
+                
+                logger.info(f"Останавливаем текущий клиент для аккаунта {current_phone}")
                 await active_admin_client.stop()
             except Exception as e:
                 logger.error(f"Ошибка при остановке клиента: {e}")
@@ -2932,23 +3219,57 @@ async def use_account_callback(client, callback_query):
         active_admin_client = None
         
         # Отправляем уведомление о переключении
-        await callback_query.answer("Переключение на выбранный аккаунт...")
+        await callback_query.answer(f"Переключение на аккаунт {account.phone}...")
         
-        # При следующем вызове get_admin_client() будет выбран новый аккаунт
-        # Запускаем принудительно get_admin_client() для обновления активного клиента
-        new_client = await get_admin_client()
+        # Принудительно запускаем get_admin_client() для использования выбранного аккаунта
+        # Сначала установим счетчик использований на минимальное значение
+        try:
+            # Увеличиваем счетчик для всех других аккаунтов
+            other_accounts = session.query(AdminAccount).filter(AdminAccount.id != account.id, AdminAccount.active == True).all()
+            for other in other_accounts:
+                if other.usage_count <= account.usage_count:
+                    other.usage_count = account.usage_count + 1
+            
+            # Устанавливаем минимальное значение для выбранного аккаунта
+            account.usage_count = 0
+            session.commit()
+            logger.info(f"Установлен минимальный счетчик использований для аккаунта {account.phone}")
+        except Exception as usage_err:
+            logger.error(f"Ошибка при обновлении счетчиков использований: {usage_err}")
         
-        if new_client:
-            # Получаем информацию о новом аккаунте
-            me = await new_client.get_me()
-            await callback_query.answer(f"Переключено на {me.first_name} {me.last_name or ''}")
-        else:
-            await callback_query.answer("Не удалось переключиться на выбранный аккаунт")
+        # Теперь запускаем get_admin_client() для обновления активного клиента
+        try:
+            new_client = await get_admin_client()
+            
+            if new_client:
+                # Проверяем, правильный ли аккаунт был выбран
+                me = await new_client.get_me()
+                new_phone = getattr(new_client, "_phone", "неизвестно")
+                
+                if new_phone == account.phone:
+                    logger.info(f"Успешное переключение на аккаунт {account.phone}")
+                    await callback_query.answer(f"Переключено на {me.first_name} {me.last_name or ''}")
+                else:
+                    logger.warning(f"Выбран неправильный аккаунт: запрошен {account.phone}, получен {new_phone}")
+                    await callback_query.answer(f"Внимание: выбран аккаунт {new_phone}")
+            else:
+                logger.error(f"Не удалось инициализировать клиент для аккаунта {account.phone}")
+                await callback_query.answer("Не удалось переключиться на выбранный аккаунт")
+        except Exception as client_err:
+            logger.error(f"Ошибка при получении нового клиента: {client_err}")
+            await callback_query.answer("Ошибка при подключении к аккаунту")
         
         # Возвращаемся к управлению аккаунтами
         await admin_manage_accounts_callback(client, callback_query)
         
     except Exception as e:
         logger.error(f"Ошибка при переключении на выбранный аккаунт: {e}")
-        await callback_query.answer(f"Произошла ошибка: {str(e)[:200]}")
-        await admin_manage_accounts_callback(client, callback_query)
+        await callback_query.answer(f"Произошла ошибка")
+        
+        try:
+            await admin_manage_accounts_callback(client, callback_query)
+        except Exception as callback_err:
+            logger.error(f"Не удалось вернуться в меню управления аккаунтами: {callback_err}")
+    finally:
+        if 'session' in locals():
+            session.close()

@@ -9,7 +9,7 @@ from pyrogram import Client, filters, types
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood
 from cryptography.fernet import Fernet
 import json
-from database import init_db, get_session, User, AdminAccount, JoinRequest
+from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key
 
 # Настройка логирования
 logging.basicConfig(
@@ -32,29 +32,11 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 CHAT_ID_1 = int(os.getenv("CHAT_ID_1"))
 CHAT_ID_2 = int(os.getenv("CHAT_ID_2"))
 
-# Подготовка ключа шифрования
-def get_fernet_key(password):
-    # Преобразуем пароль в 32-байтный ключ
-    key = hashlib.sha256(password.encode()).digest()
-    # Кодируем в base64 в URL-safe формате
-    return base64.urlsafe_b64encode(key)
-
-# Инициализация шифрования
-cipher_suite = Fernet(get_fernet_key(ENCRYPTION_KEY))
-
 # Инициализация бота
 bot = Client("telegram_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # Глобальная переменная для хранения активной сессии администратора
 active_admin_client = None
-
-# Функция для шифрования данных сессии
-def encrypt_session(session_data):
-    return cipher_suite.encrypt(json.dumps(session_data).encode()).decode()
-
-# Функция для расшифровки данных сессии
-def decrypt_session(encrypted_data):
-    return json.loads(cipher_suite.decrypt(encrypted_data.encode()).decode())
 
 async def get_admin_client():
     """

@@ -13,17 +13,8 @@ from database import init_db, get_session, AdminAccount, encrypt_session
 load_dotenv()
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
-# Подготовка ключа шифрования
-def get_fernet_key(password):
-    # Преобразуем пароль в 32-байтный ключ
-    key = hashlib.sha256(password.encode()).digest()
-    # Кодируем в base64 в URL-safe формате
-    return base64.urlsafe_b64encode(key)
-
-# Инициализация шифрования
-cipher_suite = Fernet(get_fernet_key(ENCRYPTION_KEY))
+# Удалена лишняя инициализация шифрования, используется функция из database.py
 
 async def create_admin_session(phone_number):
     """

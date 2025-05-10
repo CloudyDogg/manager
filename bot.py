@@ -356,30 +356,46 @@ async def add_user_to_chat(user_id, chat_id):
                     chat_id=target_chat.id,
                     user_ids=user_id
                 )
-                logger.info(f"Пользователь {user_id} успешно добавлен через add_chat_members")
                 
-                # Отправляем сообщение об успешном добавлении
-                await bot.send_message(
-                    user_id,
-                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                    f"Можете открыть чат в своем приложении Telegram."
-                )
+                # Добавим задержку перед проверкой статуса
+                await asyncio.sleep(2)
                 
-                # Обновляем статус заявки
-                session = get_session()
+                # Проверяем, действительно ли пользователь был добавлен
                 try:
-                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                    if join_request:
-                        join_request.status = "approved"
-                        join_request.approved_by = 0
-                        join_request.approved_at = datetime.now()
-                        session.commit()
-                except Exception as e:
-                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                finally:
-                    session.close()
-                
-                return True, "Пользователь успешно добавлен в чат"
+                    chat_member = await admin_client.get_chat_member(target_chat.id, user_id)
+                    logger.info(f"Проверка членства: пользователь {user_id} имеет статус {chat_member.status} в чате")
+                    
+                    if chat_member.status in ["member", "administrator", "creator", "restricted"]:
+                        logger.info(f"Пользователь {user_id} успешно добавлен через add_chat_members")
+                        
+                        # Отправляем сообщение об успешном добавлении
+                        await bot.send_message(
+                            user_id,
+                            f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                            f"Можете открыть чат в своем приложении Telegram."
+                        )
+                        
+                        # Обновляем статус заявки
+                        session = get_session()
+                        try:
+                            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                            if join_request:
+                                join_request.status = "approved"
+                                join_request.approved_by = 0
+                                join_request.approved_at = datetime.now()
+                                session.commit()
+                        except Exception as e:
+                            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                        finally:
+                            session.close()
+                        
+                        return True, "Пользователь успешно добавлен в чат"
+                    else:
+                        logger.error(f"Пользователь {user_id} не был добавлен в чат несмотря на успешный вызов add_chat_members (статус: {chat_member.status})")
+                        raise Exception(f"Не удалось добавить пользователя (статус: {chat_member.status})")
+                except Exception as check_error:
+                    logger.error(f"Ошибка при проверке членства пользователя в чате: {check_error}")
+                    raise Exception(f"Не удалось проверить добавление пользователя: {check_error}")
                 
             except Exception as standard_error:
                 logger.error(f"Ошибка при стандартном методе добавления: {standard_error}")
@@ -410,30 +426,45 @@ async def add_user_to_chat(user_id, chat_id):
                         )
                     )
                     
-                    logger.info(f"Пользователь {user_id} успешно добавлен через raw API")
+                    # Добавим задержку перед проверкой статуса
+                    await asyncio.sleep(2)
                     
-                    # Отправляем сообщение об успешном добавлении
-                    await bot.send_message(
-                        user_id,
-                        f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                        f"Можете открыть чат в своем приложении Telegram."
-                    )
-                    
-                    # Обновляем статус заявки
-                    session = get_session()
+                    # Проверяем, действительно ли пользователь был добавлен
                     try:
-                        join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                        if join_request:
-                            join_request.status = "approved"
-                            join_request.approved_by = 0
-                            join_request.approved_at = datetime.now()
-                            session.commit()
-                    except Exception as e:
-                        logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                    finally:
-                        session.close()
-                    
-                    return True, "Пользователь успешно добавлен в чат через raw API"
+                        chat_member = await admin_client.get_chat_member(target_chat.id, user_id)
+                        logger.info(f"Проверка членства после raw API: пользователь {user_id} имеет статус {chat_member.status} в чате")
+                        
+                        if chat_member.status in ["member", "administrator", "creator", "restricted"]:
+                            logger.info(f"Пользователь {user_id} успешно добавлен через raw API")
+                            
+                            # Отправляем сообщение об успешном добавлении
+                            await bot.send_message(
+                                user_id,
+                                f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                                f"Можете открыть чат в своем приложении Telegram."
+                            )
+                            
+                            # Обновляем статус заявки
+                            session = get_session()
+                            try:
+                                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                if join_request:
+                                    join_request.status = "approved"
+                                    join_request.approved_by = 0
+                                    join_request.approved_at = datetime.now()
+                                    session.commit()
+                            except Exception as e:
+                                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                            finally:
+                                session.close()
+                            
+                            return True, "Пользователь успешно добавлен в чат через raw API"
+                        else:
+                            logger.error(f"Пользователь {user_id} не был добавлен в чат несмотря на успешный вызов raw API (статус: {chat_member.status})")
+                            raise Exception(f"Не удалось добавить пользователя через raw API (статус: {chat_member.status})")
+                    except Exception as check_error:
+                        logger.error(f"Ошибка при проверке членства пользователя в чате после raw API: {check_error}")
+                        raise Exception(f"Не удалось проверить добавление пользователя через raw API: {check_error}")
                     
                 except Exception as raw_error:
                     logger.error(f"Ошибка при добавлении через raw API: {raw_error}")
@@ -472,30 +503,45 @@ async def add_user_to_chat(user_id, chat_id):
                             user_ids=user_id
                         )
                         
-                        logger.info(f"Пользователь {user_id} успешно добавлен после импорта контакта")
+                        # Добавим задержку перед проверкой статуса
+                        await asyncio.sleep(2)
                         
-                        # Отправляем сообщение об успешном добавлении
-                        await bot.send_message(
-                            user_id,
-                            f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                            f"Можете открыть чат в своем приложении Telegram."
-                        )
-                        
-                        # Обновляем статус заявки
-                        session = get_session()
+                        # Проверяем, действительно ли пользователь был добавлен
                         try:
-                            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                            if join_request:
-                                join_request.status = "approved"
-                                join_request.approved_by = 0
-                                join_request.approved_at = datetime.now()
-                                session.commit()
-                        except Exception as e:
-                            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                        finally:
-                            session.close()
-                        
-                        return True, "Пользователь успешно добавлен в чат через контакты"
+                            chat_member = await admin_client.get_chat_member(target_chat.id, user_id)
+                            logger.info(f"Проверка членства после ImportContacts: пользователь {user_id} имеет статус {chat_member.status} в чате")
+                            
+                            if chat_member.status in ["member", "administrator", "creator", "restricted"]:
+                                logger.info(f"Пользователь {user_id} успешно добавлен после импорта контакта")
+                                
+                                # Отправляем сообщение об успешном добавлении
+                                await bot.send_message(
+                                    user_id,
+                                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                                    f"Можете открыть чат в своем приложении Telegram."
+                                )
+                                
+                                # Обновляем статус заявки
+                                session = get_session()
+                                try:
+                                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                    if join_request:
+                                        join_request.status = "approved"
+                                        join_request.approved_by = 0
+                                        join_request.approved_at = datetime.now()
+                                        session.commit()
+                                except Exception as e:
+                                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                                finally:
+                                    session.close()
+                                
+                                return True, "Пользователь успешно добавлен в чат через контакты"
+                            else:
+                                logger.error(f"Пользователь {user_id} не был добавлен в чат несмотря на успешный вызов add_chat_members после ImportContacts (статус: {chat_member.status})")
+                                raise Exception(f"Не удалось добавить пользователя после ImportContacts (статус: {chat_member.status})")
+                        except Exception as check_error:
+                            logger.error(f"Ошибка при проверке членства пользователя в чате после ImportContacts: {check_error}")
+                            raise Exception(f"Не удалось проверить добавление пользователя после ImportContacts: {check_error}")
                         
                     except Exception as import_error:
                         logger.error(f"Ошибка при импорте контакта: {import_error}")
@@ -701,30 +747,46 @@ async def add_user_to_chat(user_id, chat_id):
                             chat_id=target_chat.id,
                             user_ids=user_id
                         )
-                        logger.info(f"Пользователь {user_id} успешно добавлен в чат после переключения аккаунта")
                         
-                        # Отправляем уведомление об успешном добавлении
-                        await bot.send_message(
-                            user_id,
-                            f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                            f"Можете открыть чат в своем приложении Telegram."
-                        )
+                        # Добавим задержку перед проверкой статуса
+                        await asyncio.sleep(2)
                         
-                        # Обновляем статус заявки
-                        session = get_session()
+                        # Проверяем, действительно ли пользователь был добавлен
                         try:
-                            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                            if join_request:
-                                join_request.status = "approved"
-                                join_request.approved_by = 0
-                                join_request.approved_at = datetime.now()
-                                session.commit()
-                        except Exception as e:
-                            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                        finally:
-                            session.close()
-                        
-                        return True, "Пользователь успешно добавлен в чат после переключения аккаунта"
+                            chat_member = await new_admin_client.get_chat_member(target_chat.id, user_id)
+                            logger.info(f"Проверка членства после переключения аккаунта: пользователь {user_id} имеет статус {chat_member.status} в чате")
+                            
+                            if chat_member.status in ["member", "administrator", "creator", "restricted"]:
+                                logger.info(f"Пользователь {user_id} успешно добавлен в чат после переключения аккаунта")
+                                
+                                # Отправляем уведомление об успешном добавлении
+                                await bot.send_message(
+                                    user_id,
+                                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                                    f"Можете открыть чат в своем приложении Telegram."
+                                )
+                                
+                                # Обновляем статус заявки
+                                session = get_session()
+                                try:
+                                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                    if join_request:
+                                        join_request.status = "approved"
+                                        join_request.approved_by = 0
+                                        join_request.approved_at = datetime.now()
+                                        session.commit()
+                                except Exception as e:
+                                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                                finally:
+                                    session.close()
+                                
+                                return True, "Пользователь успешно добавлен в чат после переключения аккаунта"
+                            else:
+                                logger.error(f"Пользователь {user_id} не был добавлен в чат несмотря на успешный вызов add_chat_members после переключения аккаунта (статус: {chat_member.status})")
+                                raise Exception(f"Не удалось добавить пользователя после переключения аккаунта (статус: {chat_member.status})")
+                        except Exception as check_error:
+                            logger.error(f"Ошибка при проверке членства пользователя в чате после переключения аккаунта: {check_error}")
+                            raise Exception(f"Не удалось проверить добавление пользователя после переключения аккаунта: {check_error}")
                     except Exception as retry_error:
                         logger.error(f"Ошибка при повторной попытке добавления после переключения аккаунта: {retry_error}")
             
@@ -2324,6 +2386,9 @@ async def manual_add_callback(client, callback_query):
         # Вызываем функцию добавления пользователя
         success, message = await add_user_to_chat(user_id, chat_id)
         logger.info(f"Результат ручного добавления: success={success}, message={message}")
+        
+        # После добавления сделаем паузу, чтобы изменения точно применились
+        await asyncio.sleep(2)
         
         # Восстанавливаем предыдущее значение настройки
         set_setting("auto_add_enabled", current_auto_add)

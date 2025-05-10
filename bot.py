@@ -3,7 +3,7 @@ import logging
 import asyncio
 import base64
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pyrogram import Client, filters, types, errors, raw
 from pyrogram.raw import functions
@@ -173,47 +173,81 @@ async def add_user_to_chat(user_id, chat_id):
                     logger.info(f"Найден чат по ID {actual_chat_id}")
                     break
         
-        # 3. Если всё ещё не нашли, попробуем использовать непосредственно ID из .env
-        # (это обычно используют как последнее средство)
-        
         invite_link_url = None
+        max_attempts = 3
         
         if target_chat:
-            try:
-                logger.info(f"Создаем одноразовую ссылку для чата {target_chat['title']} (ID: {target_chat['id']})")
-                invite_link = await admin_client.create_chat_invite_link(
-                    chat_id=target_chat['id'],
-                    member_limit=1,  # Ограничение на одного пользователя
-                    creates_join_request=False
-                )
-                invite_link_url = invite_link.invite_link
-                logger.info(f"Успешно создана одноразовая ссылка: {invite_link_url}")
-            except Exception as e:
-                logger.error(f"Ошибка при создании ссылки для найденного чата: {e}")
-                invite_link_url = None
+            # Пробуем создать ссылку несколько раз с увеличивающейся задержкой
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    # Добавляем паузу перед созданием ссылки для устранения проблем с API
+                    await asyncio.sleep(attempt * 2)  # Экспоненциальная задержка
+                    
+                    logger.info(f"Попытка {attempt}: Создаем ссылку для чата {target_chat['title']} (ID: {target_chat['id']})")
+                    invite_link = await admin_client.create_chat_invite_link(
+                        chat_id=target_chat['id'],
+                        member_limit=1,  # Ограничение на одного пользователя
+                        creates_join_request=False,
+                        expire_date=int((datetime.now() + timedelta(hours=24)).timestamp())  # Срок действия 24 часа
+                    )
+                    invite_link_url = invite_link.invite_link
+                    logger.info(f"Успешно создана ссылка: {invite_link_url}")
+                    
+                    # Проверяем созданную ссылку через другой метод для подтверждения
+                    try:
+                        # Получаем список приглашений для проверки
+                        chat_invites = await admin_client.get_chat_invite_link(
+                            chat_id=target_chat['id'],
+                            invite_link=invite_link_url
+                        )
+                        logger.info(f"Проверка подтвердила действительность ссылки")
+                        break  # Ссылка подтверждена, выходим из цикла попыток
+                    except Exception as check_err:
+                        logger.warning(f"Не удалось проверить ссылку: {check_err}, будем считать её действительной")
+                        break  # Всё равно используем ссылку
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка при создании ссылки (попытка {attempt}): {e}")
+                    if attempt == max_attempts:
+                        logger.error("Все попытки создания ссылки исчерпаны")
+                    else:
+                        logger.info(f"Ожидание перед следующей попыткой...")
         
-        # Если не удалось создать ссылку по найденному чату, пробуем прямое использование ID
+        # Если не удалось создать ссылку через чат, пробуем прямой подход с ID
         if not invite_link_url:
             try:
-                # Используем непосредственно ID из переменной окружения
+                # Используем непосредственно ID из переменной окружения без преобразований
                 direct_chat_id = CHAT_ID_1 if chat_id == CHAT_ID_1 else CHAT_ID_2
                 logger.info(f"Пробуем создать ссылку напрямую по ID: {direct_chat_id}")
                 
+                await asyncio.sleep(2)  # Задержка перед запросом
                 invite_link = await admin_client.create_chat_invite_link(
                     chat_id=direct_chat_id,
                     member_limit=1,
-                    creates_join_request=False
+                    creates_join_request=False,
+                    expire_date=int((datetime.now() + timedelta(hours=24)).timestamp())
                 )
                 invite_link_url = invite_link.invite_link
-                logger.info(f"Успешно создана одноразовая ссылка через прямой ID: {invite_link_url}")
+                logger.info(f"Успешно создана ссылка по прямому ID: {invite_link_url}")
             except Exception as e:
                 logger.error(f"Ошибка при создании ссылки по прямому ID: {e}")
                 invite_link_url = None
         
-        # Если не удалось создать ссылку ни одним способом, используем запасную
+        # Если создать ссылку не удалось, пробуем экспортировать ссылку на чат
+        if not invite_link_url and target_chat:
+            try:
+                logger.info(f"Пробуем получить ссылку для чата другим способом")
+                chat_info = await admin_client.get_chat(target_chat['id'])
+                if hasattr(chat_info, 'invite_link') and chat_info.invite_link:
+                    invite_link_url = chat_info.invite_link
+                    logger.info(f"Получена существующая ссылка: {invite_link_url}")
+            except Exception as e:
+                logger.error(f"Не удалось получить ссылку на чат: {e}")
+        
+        # Если всё ещё нет ссылки, используем запасную
         if not invite_link_url:
             invite_link_url = CHAT_LINK_1 if chat_id == CHAT_ID_1 else CHAT_LINK_2
-            logger.warning(f"Используем запасную ссылку на чат: {invite_link_url}")
+            logger.warning(f"Используем запасную ссылку: {invite_link_url}")
             
             # Проверяем, не пуста ли запасная ссылка
             if not invite_link_url:
@@ -235,6 +269,16 @@ async def add_user_to_chat(user_id, chat_id):
             f"⚠️ Ссылка действительна для одного входа и ограничена по времени."
         )
         logger.info(f"Отправлена ссылка пользователю {user_id}")
+        
+        # Уведомляем администратора о каждой отправленной ссылке
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"✅ Пользователю {user_id} отправлена ссылка для входа в чат:\n{invite_link_url}"
+                )
+            except:
+                pass
         
         # Обновляем статус заявки
         session = get_session()

@@ -52,6 +52,17 @@ bot = Client("telegram_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOK
 # Глобальная переменная для хранения активной сессии администратора
 active_admin_client = None
 
+def convert_to_supergroup_id(chat_id):
+    """
+    Преобразует публичный ID супергруппы в формат, который требуется для Pyrogram
+    """
+    if isinstance(chat_id, int) and chat_id < 0:
+        # Если ID начинается с -100, преобразуем его
+        if str(chat_id).startswith('-100'):
+            # Отрезаем -100 и возвращаем числовой ID
+            return int(str(chat_id)[4:])
+    return chat_id
+
 async def get_admin_client():
     """
     Получение активного клиента администратора с ротацией
@@ -141,13 +152,16 @@ async def add_user_to_chat(user_id, chat_id):
     chat_name = "основной чат" if chat_id == CHAT_ID_1 else "второй чат"
     
     try:
-        # Используем напрямую ID чата
-        logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {chat_id}")
+        # Преобразуем ID чата в правильный формат для Pyrogram
+        supergroup_id = convert_to_supergroup_id(chat_id)
+        logger.info(f"Преобразован ID чата из {chat_id} в {supergroup_id}")
         
         try:
             # Добавляем пользователя напрямую по ID чата
+            logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {supergroup_id}")
+            
             await admin_client.add_chat_members(
-                chat_id=chat_id,
+                chat_id=supergroup_id,
                 user_ids=user_id
             )
             
@@ -179,7 +193,7 @@ async def add_user_to_chat(user_id, chat_id):
             
             # Если не удалось добавить из-за настроек приватности, отправляем ссылку
             invite_link = await admin_client.create_chat_invite_link(
-                chat_id=chat_id,
+                chat_id=supergroup_id,
                 creates_join_request=False
             )
             invite_link_url = invite_link.invite_link

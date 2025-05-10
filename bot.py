@@ -175,34 +175,70 @@ async def add_user_to_chat(user_id, chat_id):
         logger.info(f"Попытка прямого добавления пользователя {user_id} в чат {target_chat.id}")
         
         try:
-            # Используем метод add_chat_members для добавления пользователя
-            await admin_client.add_chat_members(
+            # Проверка настроек приватности перед добавлением
+            user_info = await admin_client.get_users(user_id)
+            logger.info(f"Получена информация о пользователе: {user_info.first_name} {user_info.last_name or ''}")
+            
+            # Дополнительное логирование для проверки настроек приватности
+            logger.info(f"Проверяем возможность добавления пользователя {user_id} в чат {target_chat.id}...")
+            
+            # Попытка добавления
+            result = await admin_client.add_chat_members(
                 chat_id=target_chat.id,
                 user_ids=user_id
             )
+            logger.info(f"Результат вызова add_chat_members: {result}")
             
-            logger.info(f"Пользователь {user_id} успешно добавлен в чат")
+            # Проверяем, действительно ли пользователь добавлен
+            # Добавляем паузу для обновления списка участников
+            await asyncio.sleep(1)
             
-            # Отправляем пользователю уведомление об успешном добавлении ТОЛЬКО ЕСЛИ ДОБАВЛЕНИЕ ПРОШЛО УСПЕШНО!
-            await bot.send_message(
-                user_id,
-                f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                f"Можете открыть чат в своем приложении Telegram."
-            )
+            # Получаем список участников чата после добавления
+            logger.info(f"Проверяем наличие пользователя {user_id} в списке участников чата...")
+            chat_members = []
+            async for member in admin_client.get_chat_members(target_chat.id):
+                chat_members.append(member.user.id)
             
-            # Обновляем статус заявки
-            session = get_session()
-            try:
-                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                if join_request:
-                    join_request.status = "approved"
-                    session.commit()
-            except Exception as e:
-                logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-            finally:
-                session.close()
+            logger.info(f"Найдено {len(chat_members)} участников чата")
             
-            return True, "Пользователь успешно добавлен в чат"
+            if user_id in chat_members:
+                logger.info(f"Пользователь {user_id} найден в списке участников чата")
+                logger.info(f"Пользователь {user_id} успешно добавлен в чат (проверено)")
+                
+                # Отправляем пользователю уведомление об успешном добавлении ТОЛЬКО ЕСЛИ ДОБАВЛЕНИЕ ПРОШЛО УСПЕШНО!
+                await bot.send_message(
+                    user_id,
+                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                    f"Можете открыть чат в своем приложении Telegram."
+                )
+                
+                # Обновляем статус заявки
+                session = get_session()
+                try:
+                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                    if join_request:
+                        join_request.status = "approved"
+                        session.commit()
+                except Exception as e:
+                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                finally:
+                    session.close()
+                
+                return True, "Пользователь успешно добавлен в чат"
+            else:
+                # Если add_chat_members не вызвало исключение, но пользователь не в списке участников,
+                # значит, скорее всего, проблема с приватностью не была правильно обработана
+                logger.warning(f"Пользователь {user_id} не найден в списке участников чата ({len(chat_members)} участников)")
+                logger.warning(f"Вызов add_chat_members завершился без ошибок, но пользователь {user_id} не найден в списке участников")
+                
+                # Проверяем другие возможные причины
+                logger.info(f"Проверяем дополнительные сведения о пользователе {user_id}...")
+                logger.info(f"Имя: {user_info.first_name} {user_info.last_name or ''}")
+                logger.info(f"Username: @{user_info.username or 'отсутствует'}")
+                logger.info(f"Настройки приватности: неизвестно (предполагается ограничение)")
+                
+                # Явно указываем, что это ошибка приватности
+                raise UserPrivacyRestricted("Пользователь не добавлен из-за настроек приватности (не выявлено явно)")
             
         except UserPrivacyRestricted as privacy_error:
             logger.warning(f"ОШИБКА ПРИВАТНОСТИ: {user_id} не может быть добавлен из-за настроек приватности")
@@ -412,6 +448,7 @@ async def select_chat_callback(client, callback_query):
         
         # Добавляем пользователя
         success, message = await add_user_to_chat(user_id, chat_id)
+        logger.info(f"Результат add_user_to_chat: success={success}, message={message}")
         
         if success:
             # Если пользователь успешно добавлен, не нужно повторно отправлять сообщение

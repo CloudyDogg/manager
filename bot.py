@@ -696,35 +696,35 @@ async def add_user_to_chat(user_id, chat_id):
                     
                     # Пробуем добавить пользователя еще раз
                     try:
-                            # Добавляем пользователя
+                        # Добавляем пользователя
                         await new_admin_client.add_chat_members(
-                                chat_id=target_chat.id,
-                                user_ids=user_id
-                            )
-                                logger.info(f"Пользователь {user_id} успешно добавлен в чат после переключения аккаунта")
-                                
-                                # Отправляем уведомление об успешном добавлении
-                                await bot.send_message(
-                                    user_id,
-                                    f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
-                                    f"Можете открыть чат в своем приложении Telegram."
-                                )
-                                
-                                # Обновляем статус заявки
-                                session = get_session()
-                                try:
-                                    join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
-                                    if join_request:
-                                        join_request.status = "approved"
-                                        join_request.approved_by = 0
-                                        join_request.approved_at = datetime.now()
-                                        session.commit()
-                                except Exception as e:
-                                    logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-                                finally:
-                                    session.close()
-                                
-                                return True, "Пользователь успешно добавлен в чат после переключения аккаунта"
+                            chat_id=target_chat.id,
+                            user_ids=user_id
+                        )
+                        logger.info(f"Пользователь {user_id} успешно добавлен в чат после переключения аккаунта")
+                        
+                        # Отправляем уведомление об успешном добавлении
+                        await bot.send_message(
+                            user_id,
+                            f"✅ Вы были успешно добавлены в {chat_name}!\n\n"
+                            f"Можете открыть чат в своем приложении Telegram."
+                        )
+                        
+                        # Обновляем статус заявки
+                        session = get_session()
+                        try:
+                            join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                            if join_request:
+                                join_request.status = "approved"
+                                join_request.approved_by = 0
+                                join_request.approved_at = datetime.now()
+                                session.commit()
+                        except Exception as e:
+                            logger.error(f"Ошибка при обновлении статуса заявки: {e}")
+                        finally:
+                            session.close()
+                        
+                        return True, "Пользователь успешно добавлен в чат после переключения аккаунта"
                     except Exception as retry_error:
                         logger.error(f"Ошибка при повторной попытке добавления после переключения аккаунта: {retry_error}")
             

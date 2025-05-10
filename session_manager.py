@@ -96,30 +96,40 @@ class SessionManager:
                 logger.error(f"Админ с ID {admin_id} не найден")
                 return None
             
+            admin_username = admin.username
+            admin_phone = admin.phone
+            
             # Загружаем сессию
             session_string = self.load_session(admin.phone)
             if not session_string:
-                logger.error(f"Не удалось загрузить сессию для админа {admin.username}")
+                logger.error(f"Не удалось загрузить сессию для админа {admin_username} ({admin_phone})")
                 return None
             
             # Создаем и запускаем клиент
-            client = Client(
-                name=f"admin_{admin_id}",
-                api_id=API_ID,
-                api_hash=API_HASH,
-                session_string=session_string,
-                in_memory=True  # Сессия хранится в памяти
-            )
-            
-            await client.start()
-            self.clients[admin_id] = client
-            
-            # Обновляем информацию в БД
-            admin.is_active = True
-            session.commit()
-            
-            logger.info(f"Клиент для админа {admin.username} ({admin.phone}) успешно запущен")
-            return client
+            try:
+                client = Client(
+                    name=f"admin_{admin_id}",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    session_string=session_string,
+                    in_memory=True  # Сессия хранится в памяти
+                )
+                
+                await client.start()
+                self.clients[admin_id] = client
+                
+                # Обновляем информацию в БД
+                admin.is_active = True
+                session.commit()
+                
+                logger.info(f"Клиент для админа {admin_username} ({admin_phone}) успешно запущен")
+                return client
+            except Exception as e:
+                logger.error(f"Ошибка при запуске клиента Pyrogram для админа {admin_username} ({admin_phone}): {e}")
+                # Попытка очистить клиент из словаря, если он там есть
+                if admin_id in self.clients:
+                    del self.clients[admin_id]
+                return None
         except Exception as e:
             logger.error(f"Ошибка при запуске клиента для админа {admin_id}: {e}")
             return None

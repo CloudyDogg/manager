@@ -38,6 +38,15 @@ class ChatManager:
             try:
                 # Пытаемся добавить пользователя в чат через аккаунт админа
                 logger.info(f"Попытка добавить пользователя {user_id} в чат {chat_id} через аккаунт админа {admin_account.username}")
+                
+                # Запускаем клиент админа
+                client = await session_manager.start_client(admin_account.id)
+                if not client:
+                    error_msg = f"Не удалось запустить клиент админа {admin_account.username}"
+                    logger.error(error_msg)
+                    return False, f"Ошибка при добавлении: {error_msg}", None
+                
+                # Добавляем пользователя в чат
                 success, message = await session_manager.add_chat_member(admin_account.id, chat_id, user_id)
                 
                 if success:

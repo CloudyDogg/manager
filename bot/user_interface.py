@@ -137,9 +137,11 @@ async def process_callback(callback_query: types.CallbackQuery, state: FSMContex
     
     logger.info(f"Получен callback: {callback_data}, текущее состояние: {current_state}")
     
-    # Пропускаем админские колбэки, их обрабатывает admin_interface.py
+    # Перенаправляем админские колбэки в admin_interface.py
     if callback_data.startswith("admin:"):
-        logger.info(f"Пропускаем админский callback: {callback_data}")
+        from bot.admin_interface import process_admin_callback
+        logger.info(f"Перенаправляем админский callback: {callback_data} в модуль admin_interface")
+        await process_admin_callback(callback_query, state)
         return
     
     try:

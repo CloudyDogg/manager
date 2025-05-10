@@ -42,42 +42,57 @@ class AdminStates(StatesGroup):
 
 # Функции для проверки, является ли пользователь администратором
 def is_admin(user_id: int) -> bool:
-    """Проверяет, является ли пользователь администратором"""
+    """
+    Проверяет, является ли пользователь администратором
+    
+    Args:
+        user_id: ID пользователя для проверки
+        
+    Returns:
+        True если пользователь является администратором, иначе False
+    """
+    # Приводим user_id к int, если это строка
+    if isinstance(user_id, str):
+        try:
+            user_id = int(user_id)
+        except ValueError:
+            logger.error(f"Невозможно преобразовать user_id '{user_id}' в целое число")
+            return False
+    
+    logger.info(f"Проверка прав администратора для ID: {user_id}, тип: {type(user_id)}")
+    
+    # Проверяем, является ли пользователь системным администратором
+    # Приведем ADMIN_IDS к списку строк и int для сравнения
+    admin_ids_int = [int(admin_id) if isinstance(admin_id, str) else admin_id for admin_id in ADMIN_IDS]
+    admin_ids_str = [str(admin_id) for admin_id in ADMIN_IDS]
+    
+    # Проверяем оба варианта - строковый и числовой
+    is_system_admin = user_id in admin_ids_int or str(user_id) in admin_ids_str
+    
+    if is_system_admin:
+        logger.info(f"ID {user_id} является системным администратором")
+        return True
+    
+    # Проверяем, является ли пользователь администратором из базы данных
     try:
-        logger.info(f"Проверка прав администратора для ID: {user_id}, тип: {type(user_id)}")
+        session = DBManager.get_session()
+        from db_manager import User
         
-        # Быстрая проверка для системных администраторов (можно добавить фиксированные ID)
-        system_admins = [6327802249]
-        if user_id in system_admins:
-            logger.info(f"ID {user_id} является системным администратором")
+        # Проверяем и по числовому, и по строковому представлению
+        user = session.query(User).filter(
+            (User.user_id == user_id) | (User.user_id == str(user_id))
+        ).first()
+        
+        if user and user.is_admin:
+            logger.info(f"ID {user_id} является администратором согласно БД")
             return True
-        
-        # Конвертируем user_id в строку и int для надёжности сравнения
-        user_id_str = str(user_id)
-        user_id_int = int(user_id) if isinstance(user_id, (str, int)) else 0
-        
-        logger.info(f"Список ID администраторов: {ADMIN_IDS}, типы: {[type(admin_id) for admin_id in ADMIN_IDS]}")
-        
-        # Проверяем совпадение в виде строки
-        for admin_id in ADMIN_IDS:
-            # Проверка строковых представлений
-            if user_id_str == str(admin_id):
-                logger.info(f"ID {user_id} найден в списке администраторов (строковое сравнение)")
-                return True
-            
-            # Проверка числовых представлений
-            admin_id_int = int(admin_id) if isinstance(admin_id, (str, int)) else 0
-            if user_id_int > 0 and admin_id_int > 0 and user_id_int == admin_id_int:
-                logger.info(f"ID {user_id} найден в списке администраторов (числовое сравнение)")
-                return True
-        
-        # Если не найдено совпадений
-        logger.warning(f"ID {user_id} не найден в списке администраторов: {ADMIN_IDS}")
-        return False
     except Exception as e:
-        logger.error(f"Ошибка при проверке прав администратора: {e}")
-        # В случае ошибки возвращаем False
-        return False
+        logger.error(f"Ошибка при проверке прав администратора для ID {user_id}: {e}")
+    finally:
+        session.close()
+    
+    logger.info(f"ID {user_id} не является администратором")
+    return False
 
 # Функции для создания клавиатур
 def get_admin_main_keyboard():
@@ -421,54 +436,70 @@ async def process_admin_callback(callback_query: types.CallbackQuery, state: FSM
         
         # Маршрутизация на основе callback_data
         if callback_data == "admin:settings":
+            logger.info(f"Обработка callback admin:settings для пользователя {callback_query.from_user.id}")
             await process_admin_settings(callback_query, state)
             
         elif callback_data == "admin:stats":
+            logger.info(f"Обработка callback admin:stats для пользователя {callback_query.from_user.id}")
             await process_admin_stats(callback_query, state)
             
         elif callback_data == "admin:users":
+            logger.info(f"Обработка callback admin:users для пользователя {callback_query.from_user.id}")
             await process_admin_users(callback_query, state)
             
         elif callback_data == "admin:pending":
+            logger.info(f"Обработка callback admin:pending для пользователя {callback_query.from_user.id}")
             await process_admin_pending(callback_query, state)
             
         elif callback_data == "admin:accounts":
+            logger.info(f"Обработка callback admin:accounts для пользователя {callback_query.from_user.id}")
             await process_admin_accounts(callback_query, state)
             
         elif callback_data == "admin:back_to_main":
+            logger.info(f"Обработка callback admin:back_to_main для пользователя {callback_query.from_user.id}")
             await process_admin_back_to_main(callback_query, state)
             
         elif callback_data.startswith("admin:settings_chat:"):
             chat_id = int(callback_data.split(":")[2])
+            logger.info(f"Обработка callback admin:settings_chat:{chat_id} для пользователя {callback_query.from_user.id}")
             await process_admin_settings_chat(callback_query, state)
             
         elif callback_data.startswith("admin:approve_request:"):
             request_id = int(callback_data.split(":")[2])
+            logger.info(f"Обработка callback admin:approve_request:{request_id} для пользователя {callback_query.from_user.id}")
             await process_admin_approve_request(callback_query, state)
             
         elif callback_data.startswith("admin:reject_request:"):
             request_id = int(callback_data.split(":")[2])
+            logger.info(f"Обработка callback admin:reject_request:{request_id} для пользователя {callback_query.from_user.id}")
             await process_admin_reject_request(callback_query, state)
             
         elif callback_data == "admin:add_account":
+            logger.info(f"Обработка callback admin:add_account для пользователя {callback_query.from_user.id}")
             await process_admin_add_account(callback_query, state)
             
         elif callback_data == "admin:refresh_session":
+            logger.info(f"Обработка callback admin:refresh_session для пользователя {callback_query.from_user.id}")
             await process_admin_refresh_session(callback_query, state)
             
         elif callback_data.startswith("admin:edit_chat_info:"):
+            logger.info(f"Обработка callback {callback_data} для пользователя {callback_query.from_user.id}")
             await process_edit_chat_info(callback_query, state)
             
         elif callback_data.startswith("admin:edit_welcome:"):
+            logger.info(f"Обработка callback {callback_data} для пользователя {callback_query.from_user.id}")
             await process_edit_welcome(callback_query, state)
             
         elif callback_data.startswith("admin:edit_join_mode:"):
+            logger.info(f"Обработка callback {callback_data} для пользователя {callback_query.from_user.id}")
             await process_edit_join_mode(callback_query, state)
             
         elif callback_data.startswith("admin:set_join_mode:"):
+            logger.info(f"Обработка callback {callback_data} для пользователя {callback_query.from_user.id}")
             await process_set_join_mode(callback_query, state)
             
         elif callback_data.startswith("admin:toggle_active:"):
+            logger.info(f"Обработка callback {callback_data} для пользователя {callback_query.from_user.id}")
             await process_toggle_active(callback_query, state)
             
         else:

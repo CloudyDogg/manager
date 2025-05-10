@@ -1126,7 +1126,7 @@ async def check_pending_manual_requests():
     обобщенное уведомление администраторам (без кнопок и отдельных сообщений)
     """
     # Проверяем, включена ли функция уведомлений о заявках при запуске
-    notify_on_startup = get_setting("notify_on_startup", "false")
+    notify_on_startup = get_setting("notify_on_startup", "true")
     if notify_on_startup.lower() != "true":
         logger.info("Уведомления о заявках при запуске отключены в настройках")
         return
@@ -1136,8 +1136,8 @@ async def check_pending_manual_requests():
     session = get_session()
     try:
         # Получаем актуальные заявки со статусом manual_check
-        # Добавляем временное ограничение - заявки не старше 7 дней
-        time_limit = datetime.now() - timedelta(days=7)
+        # Добавляем временное ограничение - заявки не старше 1 дня
+        time_limit = datetime.now() - timedelta(days=1)
         pending_requests = session.query(JoinRequest).filter(
             JoinRequest.status == "manual_check",
             JoinRequest.created_at >= time_limit
@@ -1210,12 +1210,12 @@ async def startup():
     # Настройка уведомлений при запуске
     notify_value = get_setting("notify_on_startup")
     if notify_value is None:
-        logger.info("Настройка notify_on_startup не найдена. Инициализация со значением 'false'...")
-        set_setting("notify_on_startup", "false")
+        logger.info("Настройка notify_on_startup не найдена. Инициализация со значением 'true'...")
+        set_setting("notify_on_startup", "true")
     
     # Логируем финальные значения
     logger.info(f"auto_add_enabled: {get_setting('auto_add_enabled', 'true')}")
-    logger.info(f"notify_on_startup: {get_setting('notify_on_startup', 'false')}")
+    logger.info(f"notify_on_startup: {get_setting('notify_on_startup', 'true')}")
     
     # Запуск бота
     logger.info("Запуск бота...")
@@ -1238,7 +1238,7 @@ async def settings_command(client, message):
     auto_add_enabled = get_setting("auto_add_enabled", "true")
     auto_add_status = "✅ Включено" if auto_add_enabled.lower() == "true" else "❌ Отключено"
     
-    notify_on_startup = get_setting("notify_on_startup", "false")
+    notify_on_startup = get_setting("notify_on_startup", "true")
     notify_status = "✅ Включено" if notify_on_startup.lower() == "true" else "❌ Отключено"
     
     settings_text = "⚙️ Настройки бота:\n\n"
@@ -1267,7 +1267,7 @@ async def toggle_notify_on_callback(client, callback_query):
     """
     try:
         # Устанавливаем флаг в значение true
-        old_value = get_setting("notify_on_startup", "false")
+        old_value = get_setting("notify_on_startup", "true")
         logger.info(f"Текущее значение notify_on_startup перед включением: {old_value}")
         
         # Принудительно устанавливаем новое значение
@@ -1275,7 +1275,7 @@ async def toggle_notify_on_callback(client, callback_query):
         logger.info(f"Администратор {callback_query.from_user.id} включил уведомления о заявках при запуске")
         
         # Проверяем, что значение успешно изменено
-        new_value = get_setting("notify_on_startup", "false")
+        new_value = get_setting("notify_on_startup", "true")
         logger.info(f"Новое значение notify_on_startup после включения: {new_value}")
         
         # Уведомляем администратора
@@ -1295,7 +1295,7 @@ async def toggle_notify_off_callback(client, callback_query):
     """
     try:
         # Устанавливаем флаг в значение false
-        old_value = get_setting("notify_on_startup", "false")
+        old_value = get_setting("notify_on_startup", "true")
         logger.info(f"Текущее значение notify_on_startup перед отключением: {old_value}")
         
         # Принудительно устанавливаем новое значение
@@ -1323,7 +1323,7 @@ async def update_settings_menu(client, callback_query):
     auto_add_enabled = get_setting("auto_add_enabled", "true")
     auto_add_status = "✅ Включено" if auto_add_enabled.lower() == "true" else "❌ Отключено"
     
-    notify_on_startup = get_setting("notify_on_startup", "false")
+    notify_on_startup = get_setting("notify_on_startup", "true")
     notify_status = "✅ Включено" if notify_on_startup.lower() == "true" else "❌ Отключено"
     
     settings_text = "⚙️ Настройки бота:\n\n"

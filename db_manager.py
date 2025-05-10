@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
 from config import DATABASE_URL, CHAT_ID_1, CHAT_ID_2, MAX_ADDS_PER_DAY
+import logging
 
 # Создание базы данных
 engine = create_engine(DATABASE_URL)
@@ -99,6 +100,20 @@ def init_db():
 
 class DBManager:
     """Класс для работы с базой данных"""
+    
+    @staticmethod
+    def check_connection():
+        """Проверяет соединение с базой данных"""
+        session = Session()
+        try:
+            # Выполняем простой запрос для проверки соединения
+            session.execute("SELECT 1")
+            return True
+        except Exception as e:
+            logging.error(f"Ошибка при подключении к базе данных: {e}")
+            return False
+        finally:
+            session.close()
     
     @staticmethod
     def get_session():

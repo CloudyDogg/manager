@@ -34,53 +34,56 @@ class ChatManager:
                 logger.error(f"Нет доступных админов для добавления пользователя {user_id} в чат {chat_id}")
                 return False, "Нет доступных админов для добавления", None
             
-            # Попытка напрямую добавить пользователя через бота
+            # Попытка добавить пользователя через аккаунт администратора
             try:
-                # Пытаемся добавить пользователя в чат с помощью API бота
-                logger.info(f"Попытка добавить пользователя {user_id} в чат {chat_id} через API бота")
-                await bot.add_chat_member(chat_id=chat_id, user_id=user_id)
+                # Пытаемся добавить пользователя в чат через аккаунт админа
+                logger.info(f"Попытка добавить пользователя {user_id} в чат {chat_id} через аккаунт админа {admin_account.username}")
+                success, message = await session_manager.add_chat_member(admin_account.id, chat_id, user_id)
                 
-                # Если добавление успешно, обновляем базу данных
-                DBManager.add_chat_member(user_id, chat_id, admin_account.id)
-                DBManager.update_admin_usage(admin_account.id)
-                
-                # Логируем действие
-                DBManager.log_action(
-                    action="add_chat_member",
-                    description=f"Пользователь {user_id} добавлен в чат {chat_id} через API бота",
-                    user_id=user_id,
-                    admin_id=admin_account.id,
-                    chat_id=chat_id
-                )
-                
-                # Возвращаем успешный результат
-                return True, "Пользователь успешно добавлен", {
-                    "admin_id": admin_account.id,
-                    "admin_username": admin_account.username
-                }
+                if success:
+                    # Если добавление успешно, обновляем базу данных
+                    DBManager.add_chat_member(user_id, chat_id, admin_account.id)
+                    DBManager.update_admin_usage(admin_account.id)
+                    
+                    # Логируем действие
+                    DBManager.log_action(
+                        action="add_chat_member",
+                        description=f"Пользователь {user_id} добавлен в чат {chat_id} через аккаунт админа {admin_account.username}",
+                        user_id=user_id,
+                        admin_id=admin_account.id,
+                        chat_id=chat_id
+                    )
+                    
+                    # Возвращаем успешный результат
+                    return True, "Пользователь успешно добавлен", {
+                        "admin_id": admin_account.id,
+                        "admin_username": admin_account.username
+                    }
+                else:
+                    # Проверяем, связана ли ошибка с настройками приватности
+                    error_message = message.lower()
+                    if "privacy" in error_message or "restricted" in error_message:
+                        # Обновляем статус заявки
+                        join_request = DBManager.create_join_request(user_id, chat_id)
+                        if join_request:
+                            DBManager.update_join_request(join_request.id, "manual_needed")
+                        
+                        # Возвращаем ошибку с флагом приватности
+                        return False, "Ограничения приватности пользователя", {
+                            "privacy_restricted": True
+                        }
+                    
+                    # Проверяем, связана ли ошибка с правами аккаунта
+                    if "rights" in error_message or "permission" in error_message:
+                        return False, "Аккаунт администратора не имеет прав для добавления пользователей", None
+                    
+                    # Любые другие ошибки
+                    return False, f"Ошибка при добавлении: {message}", None
                 
             except Exception as e:
                 error_message = str(e)
                 logger.error(f"Ошибка при добавлении пользователя {user_id} в чат {chat_id}: {error_message}")
-                
-                # Проверяем, связана ли ошибка с настройками приватности
-                if "USER_PRIVACY_RESTRICTED" in error_message or "user's privacy" in error_message:
-                    # Обновляем статус заявки
-                    join_request = DBManager.create_join_request(user_id, chat_id)
-                    if join_request:
-                        DBManager.update_join_request(join_request.id, "manual_needed")
-                    
-                    # Возвращаем ошибку с флагом приватности
-                    return False, "Ограничения приватности пользователя", {
-                        "privacy_restricted": True
-                    }
-                
-                # Проверяем, связана ли ошибка с правами бота
-                if "bot is not a member" in error_message or "not enough rights" in error_message:
-                    return False, "Бот не имеет прав для добавления пользователей в этот чат", None
-                
-                # Любые другие ошибки
-                return False, f"Ошибка при добавлении: {error_message}", None
+                return False, f"Внутренняя ошибка: {error_message}", None
                 
         except Exception as e:
             logger.error(f"Ошибка при обработке запроса на добавление пользователя {user_id} в чат {chat_id}: {e}")

@@ -501,12 +501,22 @@ async def process_other_messages(message: types.Message):
 async def start_bot():
     """Запускает бота"""
     try:
+        # Инициализируем менеджер сессий
+        logger.info("Инициализация менеджера сессий...")
+        from session_manager import session_manager
+        
+        # Проверка соединения с базой данных
+        logger.info("Проверка соединения с базой данных...")
+        from db_manager import DBManager
+        if not DBManager.check_connection():
+            logger.error("Не удалось подключиться к базе данных!")
+            return False
+        
         # Запускаем бота
         logger.info("Запуск бота...")
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+        
+        return True
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
-        # Не пробрасываем исключение, чтобы не прерывать работу программы
-        # Вместо этого логируем ошибку и возвращаем False
-        return False
-    return True 
+        return False 

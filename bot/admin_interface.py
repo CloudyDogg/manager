@@ -369,25 +369,105 @@ def get_request_action_keyboard(request_id):
     # Создаем клавиатуру
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# Обработчики команд
+# Обработчик команды /admin
 async def cmd_admin(message: types.Message, state: FSMContext):
     """Обработчик команды /admin"""
-    # Проверяем, является ли пользователь администратором
+    # Проверяем права администратора еще раз
     if not is_admin(message.from_user.id):
-        await message.answer("У вас нет доступа к административным функциям.")
+        await message.answer("У вас нет прав администратора.")
         return
     
-    # Сбрасываем состояние
-    await state.clear()
+    logger.info(f"Пользователь {message.from_user.id} авторизован как администратор")
     
-    # Устанавливаем состояние главного меню
+    # Устанавливаем состояние основного меню админа
     await state.set_state(AdminStates.main_menu)
     
-    # Отправляем приветствие и меню
+    # Отправляем приветствие и админскую клавиатуру
     await message.answer(
-        f"Привет, {message.from_user.first_name}! 👋\nВы вошли в панель администратора.",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=get_admin_main_keyboard()
     )
+
+# ЕДИНЫЙ ОБРАБОТЧИК ДЛЯ ВСЕХ АДМИНСКИХ КОЛБЭКОВ
+async def process_admin_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    """Единый обработчик всех callback_query для админского интерфейса"""
+    # Получаем callback_data
+    callback_data = callback_query.data
+    current_state = await state.get_state()
+    
+    logger.info(f"Получен админский callback: {callback_data}, текущее состояние: {current_state}")
+    
+    try:
+        # Проверяем, что это админский колбэк
+        if not callback_data.startswith("admin:"):
+            return False  # Это не админский колбэк, пропускаем
+        
+        # Проверяем права администратора
+        if not is_admin(callback_query.from_user.id):
+            await callback_query.answer("У вас нет прав администратора", show_alert=True)
+            return True  # Обработали колбэк, но отказали в доступе
+        
+        # Маршрутизация на основе callback_data
+        if callback_data == "admin:settings":
+            await process_admin_settings(callback_query, state)
+        elif callback_data == "admin:stats":
+            await process_admin_stats(callback_query, state)
+        elif callback_data == "admin:users":
+            await process_admin_users(callback_query, state)
+        elif callback_data == "admin:pending":
+            await process_admin_pending(callback_query, state)
+        elif callback_data == "admin:accounts":
+            await process_admin_accounts(callback_query, state)
+        elif callback_data == "admin:back_to_main":
+            await process_admin_back_to_main(callback_query, state)
+        elif callback_data.startswith("admin:settings_chat:"):
+            await process_admin_settings_chat(callback_query, state)
+        elif callback_data.startswith("admin:approve_request:"):
+            await process_admin_approve_request(callback_query, state)
+        elif callback_data.startswith("admin:reject_request:"):
+            await process_admin_reject_request(callback_query, state)
+        elif callback_data == "admin:add_account":
+            await process_admin_add_account(callback_query, state)
+        elif callback_data == "admin:refresh_session":
+            await process_admin_refresh_session(callback_query, state)
+        elif callback_data.startswith("admin:edit_chat_info:"):
+            await process_edit_chat_info(callback_query, state)
+        elif callback_data.startswith("admin:edit_welcome:"):
+            await process_edit_welcome(callback_query, state)
+        elif callback_data.startswith("admin:edit_join_mode:"):
+            await process_edit_join_mode(callback_query, state)
+        elif callback_data.startswith("admin:set_join_mode:"):
+            await process_set_join_mode(callback_query, state)
+        elif callback_data.startswith("admin:toggle_active:"):
+            await process_toggle_active(callback_query, state)
+        else:
+            # Неизвестная команда
+            logger.warning(f"Неизвестный админский callback_data: {callback_data}")
+            await callback_query.answer("Неизвестная команда или устаревшая кнопка")
+            await process_admin_back_to_main(callback_query, state)
+        
+        return True  # Колбэк успешно обработан
+        
+    except Exception as e:
+        # Логируем ошибку
+        logger.error(f"Ошибка при обработке админского callback_query {callback_data}: {e}")
+        
+        # Отвечаем на callback_query
+        await callback_query.answer("Произошла ошибка при обработке запроса", show_alert=True)
+        
+        try:
+            # Возвращаем в главное меню админа
+            await state.set_state(AdminStates.main_menu)
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text="👑 Панель администратора\n\nПроизошла ошибка при обработке запроса. Выберите действие:",
+                reply_markup=get_admin_main_keyboard()
+            )
+        except Exception:
+            pass
+        
+        return True  # Обработали колбэк, но произошла ошибка
 
 # Обработчики нажатий на кнопки
 async def process_admin_settings(callback_query: types.CallbackQuery, state: FSMContext):
@@ -1148,92 +1228,15 @@ def register_admin_handlers(dp):
     # Регистрация команды
     dp.message.register(cmd_admin, Command("admin"))
     
-    # Регистрация обработчиков основных кнопок
+    # Регистрация обработчика всех админских callback_query
     dp.callback_query.register(
-        process_admin_settings, 
-        lambda c: c.data == "admin:settings"
+        process_admin_callback,
+        lambda c: c.data and c.data.startswith("admin:")
     )
     
-    dp.callback_query.register(
-        process_admin_stats, 
-        lambda c: c.data == "admin:stats"
-    )
-    
-    dp.callback_query.register(
-        process_admin_users, 
-        lambda c: c.data == "admin:users"
-    )
-    
-    dp.callback_query.register(
-        process_admin_pending, 
-        lambda c: c.data == "admin:pending"
-    )
-    
-    dp.callback_query.register(
-        process_admin_accounts, 
-        lambda c: c.data == "admin:accounts"
-    )
-    
-    dp.callback_query.register(
-        process_admin_back_to_main, 
-        lambda c: c.data == "admin:back_to_main"
-    )
-    
-    # Регистрация обработчиков настроек чатов
-    dp.callback_query.register(
-        process_admin_settings_chat, 
-        lambda c: c.data.startswith("admin:settings_chat:")
-    )
-    
-    # Регистрация обработчиков заявок
-    dp.callback_query.register(
-        process_admin_approve_request, 
-        lambda c: c.data.startswith("admin:approve_request:")
-    )
-    
-    dp.callback_query.register(
-        process_admin_reject_request, 
-        lambda c: c.data.startswith("admin:reject_request:")
-    )
-    
-    # Регистрация обработчиков управления аккаунтами
-    dp.callback_query.register(
-        process_admin_add_account,
-        lambda c: c.data == "admin:add_account"
-    )
-    
-    dp.callback_query.register(
-        process_admin_refresh_session,
-        lambda c: c.data == "admin:refresh_session"
-    )
-    
-    # Регистрация новых обработчиков для редактирования информации о чате
-    dp.callback_query.register(
-        process_edit_chat_info,
-        lambda c: c.data.startswith("admin:edit_chat_info:")
-    )
-    
-    dp.callback_query.register(
-        process_edit_welcome,
-        lambda c: c.data.startswith("admin:edit_welcome:")
-    )
-    
-    dp.callback_query.register(
-        process_edit_join_mode,
-        lambda c: c.data.startswith("admin:edit_join_mode:")
-    )
-    
-    dp.callback_query.register(
-        process_set_join_mode,
-        lambda c: c.data.startswith("admin:set_join_mode:")
-    )
-    
-    dp.callback_query.register(
-        process_toggle_active,
-        lambda c: c.data.startswith("admin:toggle_active:")
-    )
-    
-    # Регистрация обработчиков ввода текста
+    # Регистрация обработчиков текстовых сообщений в различных состояниях
     dp.message.register(process_admin_username_input, AdminStates.adding_account)
     dp.message.register(process_edit_chat_info_input, AdminStates.editing_chat_info)
     dp.message.register(process_edit_welcome_input, AdminStates.editing_welcome)
+
+    logger.info("Обработчики админского интерфейса успешно зарегистрированы")

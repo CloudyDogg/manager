@@ -2,7 +2,7 @@ import asyncio
 import logging
 import signal
 import sys
-from bot import start_bot, register_admin_handlers, dp
+from bot import start_bot, dp
 from session_manager import session_manager
 from config import MESSAGES
 
@@ -38,10 +38,6 @@ async def main():
     try:
         # Регистрация обработчиков сигналов
         handle_shutdown_signals()
-        
-        # Регистрация обработчиков админского интерфейса
-        logger.info("Регистрация обработчиков админского интерфейса...")
-        register_admin_handlers(dp)
         
         # Запуск бота
         logger.info(MESSAGES.get("bot_starting", "Запуск бота..."))

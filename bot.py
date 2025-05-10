@@ -13,6 +13,7 @@ import json
 from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine, RateLimitBlock, check_rate_limit, block_user_rate_limit, unblock_user_rate_limit, get_rate_limited_users
 import re
 import html
+import signal
 
 # Настройка логирования
 logging.basicConfig(
@@ -546,7 +547,68 @@ async def add_user_to_chat(user_id, chat_id):
                     except Exception as import_error:
                         logger.error(f"Ошибка при импорте контакта: {import_error}")
                         
-                        # Если ничего не помогло, отправляем контакт администратора пользователю
+                        # Проверяем, была ли ранее отправка контакта этому пользователю
+                        session = get_session()
+                        try:
+                            previous_contact_sent = session.query(JoinRequest).filter_by(
+                                user_id=user_id, 
+                                status="contact_sent"
+                            ).first()
+                            
+                            if previous_contact_sent:
+                                logger.info(f"Пользователь {user_id} уже получил контакт администратора ранее. Отправляем инструкции по настройкам приватности.")
+                                # Не отправляем контакт повторно, а отправляем инструкции по настройкам приватности
+                                await bot.send_message(
+                                    user_id,
+                                    f"🔒 Похоже, вы не добавили контакт администратора или настройки Telegram не позволяют добавить вас в чат.\n\n"
+                                    f"Попробуйте изменить настройки приватности:\n\n"
+                                    f"👉 Откройте настройки Telegram\n"
+                                    f"👉 Перейдите в раздел 'Конфиденциальность'\n" 
+                                    f"👉 Выберите 'Группы и каналы'\n"
+                                    f"👉 Для опции 'Кто может добавить меня в группы' выберите 'Все'\n\n"
+                                    f"📱 Мы приложили инструкции с картинками:"
+                                )
+                                
+                                # Отправляем инструкции с картинками
+                                try:
+                                    await bot.send_photo(
+                                        user_id,
+                                        "screen/1.jpg",
+                                        caption="1. Откройте настройки и выберите 'Конфиденциальность'"
+                                    )
+                                    
+                                    await bot.send_photo(
+                                        user_id,
+                                        "screen/2.jpg",
+                                        caption="2. Выберите 'Группы и каналы'"
+                                    )
+                                    
+                                    await bot.send_photo(
+                                        user_id,
+                                        "screen/3.jpg",
+                                        caption="3. Установите 'Кто может добавить меня в группы' на 'Все'"
+                                    )
+                                    
+                                    await bot.send_message(
+                                        user_id,
+                                        "🎉 После изменения настроек вернитесь сюда и повторите попытку вступления в чат!"
+                                    )
+                                except Exception as photo_err:
+                                    logger.error(f"Ошибка при отправке инструкций с изображениями: {photo_err}")
+                                
+                                # Обновляем статус заявки
+                                join_request = session.query(JoinRequest).filter_by(user_id=user_id, chat_id=chat_id, status="pending").first()
+                                if join_request:
+                                    join_request.status = "link_sent"
+                                    session.commit()
+                                
+                                return False, "contact_sent"
+                        except Exception as check_err:
+                            logger.error(f"Ошибка при проверке предыдущих заявок с контактами: {check_err}")
+                        finally:
+                            session.close()
+                            
+                        # Если не было предыдущих заявок с контактом или произошла ошибка, отправляем контакт как обычно
                         try:
                             # Получаем информацию об администраторе
                             admin_info = await admin_client.get_me()
@@ -982,11 +1044,12 @@ async def select_chat_callback(client, callback_query):
             logger.info(f"Не удалось добавить пользователя. Сообщение: {message}")
             
             # Дополнительное логирование для диагностики
-            logger.info(f"Проверка на ошибку приватности. Результаты проверок:")
+            logger.info(f"Дополнительное логирование для диагностики")
             logger.info(f"- 'приватности' in message.lower(): {('приватности' in message.lower())}")
             logger.info(f"- 'privacy' in message.lower(): {('privacy' in message.lower())}")
             logger.info(f"- 'UserPrivacyRestricted' in message: {('UserPrivacyRestricted' in message)}")
             logger.info(f"- message.startswith('UserPrivacyRestricted:'): {message.startswith('UserPrivacyRestricted:')}")
+            logger.info(f"- message == 'contact_sent': {message == 'contact_sent'}")
             
             # Проверяем сообщение об ошибке на наличие ключевых слов о приватности
             if "приватности" in message.lower() or "privacy" in message.lower() or "UserPrivacyRestricted" in message or message.startswith("UserPrivacyRestricted:"):
@@ -1030,6 +1093,77 @@ async def select_chat_callback(client, callback_query):
                 for admin_id in ADMIN_IDS:
                     try:
                         await client.send_message(admin_id, admin_text)
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
+            elif message == "contact_sent":
+                # Если пользователю уже был отправлен контакт администратора ранее
+                logger.info(f"Пользователю {user_id} уже был отправлен контакт администратора ранее")
+                
+                # Обновляем статус заявки
+                join_request.status = "link_sent"
+                session.commit()
+                
+                # Информируем пользователя о необходимости изменить настройки приватности
+                keyboard = types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")]
+                ])
+                
+                await callback_query.edit_message_text(
+                    "🔒 Похоже, вы не добавили контакт администратора в свои контакты или настройки приватности не позволяют добавить вас в группу.\n\n"
+                    "Для решения проблемы:\n\n"
+                    "1️⃣ Убедитесь, что вы добавили контакт администратора, который мы отправили вам ранее\n\n"
+                    "2️⃣ Измените настройки приватности Telegram:\n"
+                    "👉 Откройте настройки Telegram\n"
+                    "👉 Перейдите в раздел 'Конфиденциальность'\n"
+                    "👉 Выберите 'Группы и каналы'\n"
+                    "👉 Установите 'Кто может добавить меня в группы' на 'Все'\n\n"
+                    "📱 Сейчас я отправлю вам инструкции с картинками:",
+                    reply_markup=keyboard
+                )
+                
+                # Отправляем инструкции с картинками
+                try:
+                    await bot.send_photo(
+                        user_id,
+                        "screen/1.jpg",
+                        caption="1. Откройте настройки и выберите 'Конфиденциальность'"
+                    )
+                    
+                    await bot.send_photo(
+                        user_id,
+                        "screen/2.jpg",
+                        caption="2. Выберите 'Группы и каналы'"
+                    )
+                    
+                    await bot.send_photo(
+                        user_id,
+                        "screen/3.jpg",
+                        caption="3. Установите 'Кто может добавить меня в группы' на 'Все'"
+                    )
+                    
+                    await bot.send_message(
+                        user_id,
+                        "🎉 После изменения настроек вернитесь сюда и повторите попытку вступления в чат!"
+                    )
+                except Exception as photo_err:
+                    logger.error(f"Ошибка при отправке инструкций с изображениями: {photo_err}")
+                
+                # Отправляем уведомление администраторам
+                user_info = await client.get_users(user_id)
+                admin_text = (
+                    f"⚠️ Повторная попытка добавления пользователя после получения контакта:\n\n"
+                    f"👤 <b>Пользователь:</b>\n"
+                    f"ID: <code>{user_id}</code>\n"
+                    f"Имя: {user_info.first_name} {user_info.last_name or ''}\n"
+                    f"Username: @{user_info.username or 'отсутствует'}\n\n"
+                    f"🔒 Причина: Ограничения приватности или не добавлен контакт\n"
+                    f"📧 Действие: Отправлены инструкции по изменению настроек\n"
+                    f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+                )
+                
+                for admin_id in ADMIN_IDS:
+                    try:
+                        await client.send_message(admin_id, admin_text, parse_mode=enums.ParseMode.HTML)
                     except Exception as e:
                         logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
             elif message == "auto_add_disabled":
@@ -1140,8 +1274,12 @@ async def select_chat_callback(client, callback_query):
                     "Попробуй еще раз чуть позже или напиши нам в поддержку - мы обязательно поможем! 💪"
                 )
                 
-                # Подставляем конкретную ошибку в шаблон
-                error_text = error_message_template.replace("{error}", message)
+                # Подставляем конкретную ошибку в шаблон или используем более дружественное сообщение
+                if message == "contact_sent":
+                    error_text = "🔒 Необходимо изменить настройки приватности и добавить контакт администратора.\n\n" + \
+                                "Мы отправили вам дополнительные инструкции в сообщениях выше. Пожалуйста, следуйте им и попробуйте снова."
+                else:
+                    error_text = error_message_template.replace("{error}", message)
                 
                 keyboard = types.InlineKeyboardMarkup([
                     [types.InlineKeyboardButton("↩️ Вернуться в меню", callback_data="back_to_menu")],
@@ -2349,13 +2487,19 @@ async def shutdown():
     logger.info("Бот остановлен")
 
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(startup())
-    except KeyboardInterrupt:
-        loop.run_until_complete(shutdown())
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+    with bot:
+        logger.info("Инициализация бота...")
+        bot.loop.run_until_complete(startup())
+        
+        # Регистрируем обработчик выключения
+        bot.loop.add_signal_handler(signal.SIGINT, lambda: bot.loop.create_task(shutdown()))
+        
+        logger.info("Бот запущен!")
+        try:
+            bot.loop.run_forever()
+        finally:
+            bot.loop.run_until_complete(shutdown())
+            logger.info("Бот остановлен")
 
 # Обработчики для ручного добавления и отклонения заявок
 @bot.on_callback_query(filters.regex(r"^manual_add_\d+_-?\d+$"))

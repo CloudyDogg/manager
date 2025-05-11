@@ -1218,14 +1218,20 @@ async def admin_unblock_callback(client, callback_query):
 @bot.on_callback_query(filters.regex(r"^admin_add_account$"))
 async def admin_add_account_callback(client, callback_query):
     """
-    Информация о добавлении аккаунта
+    Запрос номера телефона для добавления аккаунта администратора
     """
+    # Устанавливаем состояние "ожидание номера телефона"
+    user_id = callback_query.from_user.id
+    set_setting(f"waiting_admin_phone_{user_id}", "true")
+    
     await callback_query.edit_message_text(
-        "⚙️ Для добавления аккаунта администратора необходимо создать JSON-сессию Pyrogram.\n\n"
-        "Запустите скрипт session_creator.py для авторизации нового аккаунта.",
+        "📱 <b>Добавление аккаунта администратора</b>\n\n"
+        "1️⃣ Введите номер телефона в международном формате (например, <code>+79123456789</code>):\n\n"
+        "<i>Этот номер будет использоваться для добавления пользователей в чаты.</i>",
         reply_markup=types.InlineKeyboardMarkup([
-            [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
-        ])
+            [types.InlineKeyboardButton("↩️ Отмена", callback_data="back_to_admin")]
+        ]),
+        parse_mode=enums.ParseMode.HTML
     )
 
 @bot.on_callback_query(filters.regex(r"^admin_remove_account$"))
@@ -1734,6 +1740,12 @@ async def handle_new_ui_text(client, message):
     """
     user_id = message.from_user.id
     waiting_status = get_setting(f"waiting_text_{user_id}", "false")
+    
+    # Проверяем, не обрабатывается ли сообщение в функции handle_admin_input
+    if get_setting(f"waiting_admin_phone_{user_id}", "false").lower() == "true" or \
+       get_setting(f"waiting_admin_code_{user_id}", "false").lower() == "true":
+        # Это сообщение для добавления админ-аккаунта, игнорируем здесь
+        return
     
     # Если пользователь не в состоянии ожидания нового текста, игнорируем
     if waiting_status.lower() != "true":
@@ -2499,3 +2511,178 @@ async def admin_rate_limited_users_callback(client, callback_query):
             f"❌ Произошла ошибка при получении списка пользователей с ограничениями: {str(e)[:200]}",
             reply_markup=keyboard
         )
+
+async def create_admin_session(phone_number, code, user_id):
+    """
+    Создание сессии администратора
+    """
+    logger.info(f"Создание сессии для номера {phone_number}...")
+    
+    # Временный идентификатор сессии
+    session_name = f"temp_session_{phone_number}"
+    
+    # Сохраняем код для текущего пользователя
+    set_setting(f"admin_auth_code_{user_id}", code)
+    
+    # Создаем клиент Pyrogram
+    client = Client(
+        session_name,
+        api_id=API_ID,
+        api_hash=API_HASH,
+        phone_number=phone_number,
+        in_memory=True
+    )
+    
+    try:
+        # Функция для обработки кода подтверждения
+        async def phone_code_callback(*args, **kwargs):
+            return get_setting(f"admin_auth_code_{user_id}")
+        
+        # Устанавливаем обработчик
+        client.phone_code_callback = phone_code_callback
+        
+        # Запускаем клиент (используем сохраненный код)
+        await client.start()
+        logger.info(f"Авторизация успешна для номера {phone_number}")
+        
+        # Получаем данные сессии
+        session_string = await client.export_session_string()
+        
+        # Создаем структуру данных сессии в формате JSON
+        session_data = {
+            "session_string": session_string,
+            "phone_number": phone_number
+        }
+        
+        # Шифруем данные сессии
+        encrypted_data = encrypt_session(session_data)
+        
+        # Сохраняем в базу данных
+        session = get_session()
+        
+        # Проверяем, существует ли уже такой аккаунт
+        existing_account = session.query(AdminAccount).filter_by(phone=phone_number).first()
+        if existing_account:
+            existing_account.session_data = encrypted_data
+            existing_account.active = True
+            session.commit()
+            logger.info(f"Обновлена сессия для аккаунта {phone_number}")
+        else:
+            new_account = AdminAccount(
+                phone=phone_number,
+                active=True,
+                session_data=encrypted_data
+            )
+            session.add(new_account)
+            session.commit()
+            logger.info(f"Добавлен новый аккаунт администратора {phone_number}")
+            
+        # Останавливаем клиент
+        await client.stop()
+        
+        # Удаляем временные данные
+        set_setting(f"admin_auth_code_{user_id}", "")
+        set_setting(f"waiting_admin_phone_{user_id}", "false")
+        set_setting(f"waiting_admin_code_{user_id}", "false")
+        set_setting(f"admin_phone_{user_id}", "")
+        
+        logger.info(f"Сессия для номера {phone_number} успешно создана и сохранена.")
+        return True, "Аккаунт администратора успешно добавлен"
+    except Exception as e:
+        logger.error(f"Ошибка при создании сессии для номера {phone_number}: {e}")
+        return False, f"Ошибка при создании сессии: {str(e)}"
+
+@bot.on_message(filters.private & filters.user(ADMIN_IDS) & filters.text)
+async def handle_admin_input(client, message):
+    """
+    Обработка ввода от администратора для добавления аккаунта
+    """
+    user_id = message.from_user.id
+    waiting_phone = get_setting(f"waiting_admin_phone_{user_id}", "false")
+    waiting_code = get_setting(f"waiting_admin_code_{user_id}", "false")
+    
+    # Обработка номера телефона
+    if waiting_phone.lower() == "true":
+        phone_number = message.text.strip()
+        
+        # Проверяем формат номера
+        if not phone_number.startswith("+"):
+            await message.reply("❌ Неверный формат номера. Номер должен начинаться с '+' и кода страны.\n\nПопробуйте еще раз:")
+            return
+        
+        # Сохраняем номер телефона
+        set_setting(f"admin_phone_{user_id}", phone_number)
+        # Меняем состояние на ожидание кода
+        set_setting(f"waiting_admin_phone_{user_id}", "false")
+        set_setting(f"waiting_admin_code_{user_id}", "true")
+        
+        # Отправляем инструкцию для ввода кода
+        await message.reply(
+            "2️⃣ Телефон принят. На указанный номер отправлен код подтверждения.\n\n"
+            "Введите полученный код:",
+            reply_markup=types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_admin_add")]
+            ])
+        )
+        return
+    
+    # Обработка кода подтверждения
+    elif waiting_code.lower() == "true":
+        auth_code = message.text.strip()
+        phone_number = get_setting(f"admin_phone_{user_id}", "")
+        
+        if not phone_number:
+            await message.reply("❌ Произошла ошибка: номер телефона не найден.\n\nПопробуйте заново начать процесс добавления.")
+            return
+        
+        # Отправляем сообщение о процессе
+        status_message = await message.reply("⏳ Выполняется авторизация и создание сессии...")
+        
+        # Создаем сессию
+        success, result_message = await create_admin_session(phone_number, auth_code, user_id)
+        
+        if success:
+            # Обновляем статусное сообщение
+            await status_message.edit_text(
+                f"✅ {result_message}\n\n"
+                f"Телефон: {phone_number}\n\n"
+                "Теперь этот аккаунт может использоваться для добавления пользователей в чаты.",
+                reply_markup=types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton("🔙 Вернуться в панель администратора", callback_data="back_to_admin")]
+                ])
+            )
+        else:
+            # Обновляем статусное сообщение
+            await status_message.edit_text(
+                f"❌ {result_message}\n\n"
+                "Попробуйте снова или используйте другой номер телефона.",
+                reply_markup=types.InlineKeyboardMarkup([
+                    [types.InlineKeyboardButton("🔄 Попробовать снова", callback_data="admin_add_account")],
+                    [types.InlineKeyboardButton("🔙 Вернуться в панель администратора", callback_data="back_to_admin")]
+                ])
+            )
+        
+        # Сбрасываем состояния
+        set_setting(f"waiting_admin_phone_{user_id}", "false")
+        set_setting(f"waiting_admin_code_{user_id}", "false")
+        set_setting(f"admin_phone_{user_id}", "")
+        return
+
+@bot.on_callback_query(filters.regex(r"^cancel_admin_add$"))
+async def cancel_admin_add_callback(client, callback_query):
+    """
+    Отмена процесса добавления аккаунта администратора
+    """
+    user_id = callback_query.from_user.id
+    
+    # Сбрасываем все состояния
+    set_setting(f"waiting_admin_phone_{user_id}", "false")
+    set_setting(f"waiting_admin_code_{user_id}", "false")
+    set_setting(f"admin_phone_{user_id}", "")
+    
+    await callback_query.edit_message_text(
+        "❌ Процесс добавления аккаунта отменен.",
+        reply_markup=types.InlineKeyboardMarkup([
+            [types.InlineKeyboardButton("🔙 Вернуться в панель администратора", callback_data="back_to_admin")]
+        ])
+    )

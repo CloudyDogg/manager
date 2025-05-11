@@ -397,6 +397,7 @@ async def add_user_to_chat(user_id, chat_id):
             logger.error(f"Слишком много запросов на добавление, лимит превышен")
             
             # Деактивируем текущий аккаунт администратора
+            global active_admin_client
             session = get_session()
             try:
                 if hasattr(admin_client, '_phone'):
@@ -410,7 +411,6 @@ async def add_user_to_chat(user_id, chat_id):
                         next_account = get_next_admin_account()
                         if next_account:
                             # Останавливаем текущий клиент
-                            global active_admin_client
                             if active_admin_client and active_admin_client.is_connected:
                                 try:
                                     await active_admin_client.stop()
@@ -2940,6 +2940,7 @@ async def toggle_account_callback(client, callback_query):
     """
     try:
         # Получаем ID аккаунта и текущий статус из callback_data
+        global active_admin_client
         match = re.match(r"^toggle_account_(\d+)_([01])$", callback_query.data)
         if not match:
             await callback_query.answer("❌ Некорректные данные")
@@ -2969,7 +2970,6 @@ async def toggle_account_callback(client, callback_query):
                     logger.error(f"Ошибка при остановке клиента: {e}")
                     
                 # Сбрасываем клиент
-                global active_admin_client
                 active_admin_client = None
                 
                 logger.info(f"Деактивирован текущий активный аккаунт {account.phone}")

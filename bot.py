@@ -924,7 +924,6 @@ async def admin_command(client, message):
         [types.InlineKeyboardButton("👥 Список пользователей", callback_data="admin_users")],
         [types.InlineKeyboardButton("📋 Активные заявки", callback_data="admin_active_requests")],
         [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
-        [types.InlineKeyboardButton("⚠️ Пользователи с ограничениями", callback_data="admin_rate_limited_users")],
         [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
@@ -2428,6 +2427,11 @@ async def admin_rate_limited_users_callback(client, callback_query):
     """
     Список пользователей, заблокированных за превышение лимита заявок
     """
+    # Возвращаем пользователя в админ-меню вместо отображения списка
+    # так как функционал был удален
+    await back_to_admin_callback(client, callback_query)
+    return
+    
     try:
         # Получаем список заблокированных пользователей
         blocked_users = get_rate_limited_users()

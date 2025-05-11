@@ -10,7 +10,7 @@ from pyrogram.raw import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood, InviteHashExpired
 from cryptography.fernet import Fernet
 import json
-from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine, RateLimitBlock, check_rate_limit, block_user_rate_limit, unblock_user_rate_limit, get_rate_limited_users, get_next_admin_account
+from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine, RateLimitBlock, check_rate_limit, block_user_rate_limit, unblock_user_rate_limit, get_rate_limited_users, get_next_admin_account, migrate_chat_id_to_bigint
 import re
 
 # Настройка логирования
@@ -388,8 +388,6 @@ async def add_user_to_chat(user_id, chat_id):
                     session.commit()
             except Exception as e:
                 logger.error(f"Ошибка при обновлении статуса заявки: {e}")
-            finally:
-                session.close()
                 
             return True, "Пользователь уже состоит в чате"
             
@@ -569,8 +567,6 @@ async def start_command(client, message):
     except Exception as e:
         logger.error(f"Ошибка в команде start: {e}")
         await message.reply("Произошла ошибка. Пожалуйста, попробуйте позже.")
-    finally:
-        session.close()
 
 @bot.on_callback_query(filters.regex(r"^show_chats$"))
 async def show_chats_callback(client, callback_query):
@@ -926,8 +922,6 @@ async def select_chat_callback(client, callback_query):
     except Exception as e:
         logger.error(f"Ошибка при выборе чата: {e}")
         await callback_query.answer("Произошла ошибка. Пожалуйста, попробуйте позже.")
-    finally:
-        session.close()
 
 @bot.on_callback_query(filters.regex(r"^back_to_menu$"))
 async def back_to_menu_callback(client, callback_query):
@@ -1474,6 +1468,14 @@ async def startup():
     logger.info("Инициализация базы данных...")
     init_db()
     logger.info("База данных инициализирована")
+    
+    # Миграция chat_id на BigInteger для решения проблемы с переполнением
+    try:
+        logger.info("Запуск миграции chat_id на BigInteger...")
+        migrate_chat_id_to_bigint()
+        logger.info("Миграция chat_id на BigInteger завершена успешно")
+    except Exception as e:
+        logger.error(f"Ошибка при миграции chat_id на BigInteger: {e}")
     
     # Проверка таблицы Settings
     session = get_session()

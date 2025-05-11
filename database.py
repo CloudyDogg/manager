@@ -2,7 +2,7 @@ import os
 import json
 import base64
 import hashlib
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text, DateTime, func
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text, DateTime, func, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timedelta
@@ -63,7 +63,7 @@ class JoinRequest(Base):
     
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer)
-    chat_id = Column(Integer)
+    chat_id = Column(BigInteger)
     status = Column(String, default="pending")  # pending, approved, rejected, link_sent, manual_check, contact_sent
     created_at = Column(DateTime, default=datetime.now)
     approved_by = Column(Integer, nullable=True)  # ID администратора, который обработал заявку
@@ -258,6 +258,46 @@ def get_next_admin_account(current_account_id=None):
     
 def init_db():
     Base.metadata.create_all(engine)
-    
+
+def migrate_chat_id_to_bigint():
+    """
+    Миграция для изменения типа chat_id с Integer на BigInteger в таблице join_requests.
+    Должна быть вызвана при первом запуске после обновления кода.
+    """
+    conn = engine.connect()
+    try:
+        # SQLite
+        if database_url.startswith('sqlite'):
+            # В SQLite нет прямого изменения типа, поэтому создаем новую таблицу и переносим данные
+            conn.execute(text("""
+                CREATE TABLE join_requests_new (
+                    id INTEGER PRIMARY KEY,
+                    user_id INTEGER,
+                    chat_id BIGINT,
+                    status TEXT,
+                    created_at TIMESTAMP,
+                    approved_by INTEGER,
+                    approved_at TIMESTAMP
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO join_requests_new 
+                SELECT id, user_id, chat_id, status, created_at, approved_by, approved_at
+                FROM join_requests
+            """))
+            conn.execute(text("DROP TABLE join_requests"))
+            conn.execute(text("ALTER TABLE join_requests_new RENAME TO join_requests"))
+        # PostgreSQL
+        else:
+            conn.execute(text("ALTER TABLE join_requests ALTER COLUMN chat_id TYPE BIGINT"))
+        
+        print("Миграция типа chat_id успешно завершена")
+        return True
+    except Exception as e:
+        print(f"Ошибка при миграции: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_session():
     return Session() 

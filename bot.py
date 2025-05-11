@@ -10,7 +10,7 @@ from pyrogram.raw import functions
 from pyrogram.errors import UserAlreadyParticipant, UserPrivacyRestricted, PeerFlood, InviteHashExpired
 from cryptography.fernet import Fernet
 import json
-from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine, RateLimitBlock, check_rate_limit, block_user_rate_limit, unblock_user_rate_limit, get_rate_limited_users
+from database import init_db, get_session, User, AdminAccount, JoinRequest, encrypt_session, decrypt_session, get_fernet_key, get_setting, set_setting, Base, engine, RateLimitBlock, check_rate_limit, block_user_rate_limit, unblock_user_rate_limit, get_rate_limited_users, get_next_admin_account
 import re
 
 # Настройка логирования
@@ -73,7 +73,38 @@ async def get_admin_client():
     # Если клиент уже создан и активен, возвращаем его
     if active_admin_client and active_admin_client.is_connected:
         logger.info("Используем существующий клиент администратора")
-        return active_admin_client
+        
+        # Проверяем, не превышает ли текущий админ лимиты использования
+        session = get_session()
+        try:
+            # Получаем информацию о текущем аккаунте
+            if hasattr(active_admin_client, '_phone'):
+                admin_account = session.query(AdminAccount).filter_by(phone=active_admin_client._phone).first()
+                if admin_account:
+                    # Проверяем лимит использования
+                    usage_threshold = int(get_setting("admin_usage_threshold", "50"))
+                    if admin_account.usage_count >= usage_threshold:
+                        logger.warning(f"Аккаунт {admin_account.phone} достиг порогового значения использований ({admin_account.usage_count}/{usage_threshold}). Выполняется ротация.")
+                        # Если лимит превышен, останавливаем текущий клиент для выполнения ротации
+                        try:
+                            await active_admin_client.stop()
+                        except Exception as e:
+                            logger.error(f"Ошибка при остановке клиента: {e}")
+                        active_admin_client = None
+                    else:
+                        # Если лимит не превышен, просто увеличиваем счетчик
+                        admin_account.usage_count += 1
+                        admin_account.last_used = datetime.now()
+                        session.commit()
+                        return active_admin_client
+        except Exception as e:
+            logger.error(f"Ошибка при проверке лимитов использования: {e}")
+        finally:
+            session.close()
+            
+        # Если всё проверили и клиент всё ещё активен, возвращаем его
+        if active_admin_client and active_admin_client.is_connected:
+            return active_admin_client
     
     # Если клиент существует, но не активен, пытаемся остановить его
     if active_admin_client:
@@ -119,6 +150,9 @@ async def get_admin_client():
             # Получаем информацию о самом себе для проверки
             me = await client.get_me()
             logger.info(f"Авторизован как: {me.first_name} {me.last_name or ''} (@{me.username or 'нет'})")
+            
+            # Сохраняем телефон для идентификации аккаунта
+            client._phone = admin_account.phone
             
             # Обновляем статистику использования
             admin_account.last_used = datetime.now()
@@ -371,6 +405,44 @@ async def add_user_to_chat(user_id, chat_id):
                         admin_account.active = False
                         session.commit()
                         logger.warning(f"Аккаунт {admin_account.phone} деактивирован из-за лимита добавлений")
+                        
+                        # Пытаемся найти и активировать следующий доступный аккаунт
+                        next_account = get_next_admin_account()
+                        if next_account:
+                            # Останавливаем текущий клиент
+                            global active_admin_client
+                            if active_admin_client and active_admin_client.is_connected:
+                                try:
+                                    await active_admin_client.stop()
+                                except Exception as e:
+                                    logger.error(f"Ошибка при остановке клиента: {e}")
+                            active_admin_client = None
+                            
+                            # Уведомляем администраторов о ротации
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await bot.send_message(
+                                        admin_id,
+                                        f"🔄 Выполнена автоматическая ротация аккаунтов администратора.\n\n"
+                                        f"❌ Аккаунт {admin_account.phone} деактивирован из-за лимита добавления пользователей (PeerFlood).\n"
+                                        f"✅ Активирован аккаунт {next_account.phone}\n"
+                                        f"⏰ {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+                                    )
+                                except Exception as admin_err:
+                                    logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {admin_err}")
+                        else:
+                            logger.error("Нет доступных аккаунтов для ротации")
+                            for admin_id in ADMIN_IDS:
+                                try:
+                                    await bot.send_message(
+                                        admin_id,
+                                        f"⚠️ ВНИМАНИЕ! Все аккаунты администраторов деактивированы.\n\n"
+                                        f"❌ Последний активный аккаунт {admin_account.phone} был деактивирован из-за лимита добавления пользователей (PeerFlood).\n"
+                                        f"❗ Необходимо добавить новые аккаунты администраторов через панель управления.\n"
+                                        f"⏰ {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+                                    )
+                                except Exception as admin_err:
+                                    logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {admin_err}")
                 else:
                     logger.warning("Не удалось определить телефон аккаунта для деактивации")
             except Exception as e:
@@ -378,7 +450,7 @@ async def add_user_to_chat(user_id, chat_id):
             finally:
                 session.close()
                 
-            return False, "Достигнут лимит добавлений. Попробуйте позже."
+            return False, "Достигнут лимит добавлений. Аккаунт администратора деактивирован и выполнена ротация. Попробуйте повторить запрос."
             
         except Exception as e:
             # Логируем все другие возможные ошибки для диагностики
@@ -916,6 +988,7 @@ async def admin_command(client, message):
         [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
         [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
+        [types.InlineKeyboardButton("🔄 Управление аккаунтами админа", callback_data="admin_accounts_management")],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
         [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
@@ -1255,6 +1328,7 @@ async def back_to_admin_callback(client, callback_query):
         [types.InlineKeyboardButton("📚 История заявок", callback_data="admin_requests_history")],
         [types.InlineKeyboardButton(auto_add_button_text, callback_data=auto_add_callback)],
         [types.InlineKeyboardButton("✏️ Настройка текста интерфейса", callback_data="ui_text_settings")],
+        [types.InlineKeyboardButton("🔄 Управление аккаунтами админа", callback_data="admin_accounts_management")],
         [types.InlineKeyboardButton("🔒 Заблокировать пользователя", callback_data="admin_block")],
         [types.InlineKeyboardButton("🔓 Разблокировать пользователя", callback_data="admin_unblock")],
         [types.InlineKeyboardButton("➕ Добавить админ-аккаунт", callback_data="admin_add_account")],
@@ -2676,3 +2750,258 @@ async def cancel_admin_add_callback(client, callback_query):
             [types.InlineKeyboardButton("🔙 Вернуться в панель администратора", callback_data="back_to_admin")]
         ])
     )
+
+# Добавить новый обработчик для управления аккаунтами админа
+@bot.on_callback_query(filters.regex(r"^admin_accounts_management$"))
+async def admin_accounts_management_callback(client, callback_query):
+    """
+    Управление аккаунтами администратора (просмотр, ротация, активация/деактивация)
+    """
+    try:
+        session = get_session()
+        
+        # Получаем все аккаунты администраторов
+        accounts = session.query(AdminAccount).order_by(AdminAccount.active.desc(), AdminAccount.usage_count).all()
+        
+        if not accounts:
+            keyboard = types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("➕ Добавить аккаунт", callback_data="admin_add_account")],
+                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+            ])
+            await callback_query.edit_message_text("Список аккаунтов администраторов пуст.", reply_markup=keyboard)
+            return
+        
+        # Получаем текущий порог использования для автоматической ротации
+        usage_threshold = int(get_setting("admin_usage_threshold", "50"))
+        
+        accounts_text = f"👥 <b>Управление аккаунтами администраторов:</b>\n\n"
+        accounts_text += f"ℹ️ <b>Текущий порог авторотации:</b> {usage_threshold} использований\n\n"
+        
+        # Форматируем список аккаунтов
+        for i, account in enumerate(accounts):
+            # Статус аккаунта
+            status = "✅ Активен" if account.active else "❌ Деактивирован"
+            
+            # Процент использования относительно порога
+            if usage_threshold > 0:
+                usage_percent = (account.usage_count / usage_threshold) * 100
+                usage_status = f"{account.usage_count}/{usage_threshold} ({usage_percent:.1f}%)"
+            else:
+                usage_status = f"{account.usage_count}"
+            
+            # Информация о последнем использовании
+            last_used = account.last_used.strftime('%d.%m.%Y %H:%M') if account.last_used else "никогда"
+            
+            accounts_text += f"{i+1}. <b>Телефон:</b> <code>{account.phone}</code>\n"
+            accounts_text += f"   <b>Статус:</b> {status}\n"
+            accounts_text += f"   <b>Использований:</b> {usage_status}\n"
+            accounts_text += f"   <b>Последнее использование:</b> {last_used}\n\n"
+        
+        # Создаем кнопки для управления
+        buttons = []
+        
+        # Кнопки для изменения порога автоматической ротации
+        buttons.append([
+            types.InlineKeyboardButton("⬇️ Уменьшить порог", callback_data="decrease_threshold"),
+            types.InlineKeyboardButton("⬆️ Увеличить порог", callback_data="increase_threshold")
+        ])
+        
+        # Кнопка для принудительной ротации
+        buttons.append([types.InlineKeyboardButton("🔄 Выполнить ротацию сейчас", callback_data="force_rotation")])
+        
+        # Кнопки для активации/деактивации аккаунтов
+        for account in accounts:
+            action = "Деактивировать" if account.active else "Активировать"
+            buttons.append([
+                types.InlineKeyboardButton(
+                    f"{'❌' if account.active else '✅'} {action} {account.phone}", 
+                    callback_data=f"toggle_account_{account.id}_{1 if account.active else 0}"
+                )
+            ])
+        
+        # Кнопка для сброса счетчика использований
+        buttons.append([types.InlineKeyboardButton("🔄 Сбросить все счетчики", callback_data="reset_usage_counters")])
+        
+        # Кнопка возврата
+        buttons.append([types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")])
+        
+        keyboard = types.InlineKeyboardMarkup(buttons)
+        
+        await callback_query.edit_message_text(accounts_text, reply_markup=keyboard, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Ошибка при управлении аккаунтами администраторов: {e}")
+        await callback_query.edit_message_text(
+            "Произошла ошибка при загрузке списка аккаунтов.",
+            reply_markup=types.InlineKeyboardMarkup([
+                [types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_admin")]
+            ])
+        )
+    finally:
+        session.close()
+
+@bot.on_callback_query(filters.regex(r"^increase_threshold$"))
+async def increase_threshold_callback(client, callback_query):
+    """
+    Увеличение порога автоматической ротации
+    """
+    try:
+        # Получаем текущий порог
+        current_threshold = int(get_setting("admin_usage_threshold", "50"))
+        
+        # Увеличиваем на 10
+        new_threshold = current_threshold + 10
+        
+        # Сохраняем новое значение
+        set_setting("admin_usage_threshold", str(new_threshold))
+        
+        await callback_query.answer(f"✅ Порог увеличен до {new_threshold}")
+        
+        # Возвращаемся в меню управления аккаунтами
+        await admin_accounts_management_callback(client, callback_query)
+    except Exception as e:
+        logger.error(f"Ошибка при увеличении порога ротации: {e}")
+        await callback_query.answer("❌ Произошла ошибка")
+
+@bot.on_callback_query(filters.regex(r"^decrease_threshold$"))
+async def decrease_threshold_callback(client, callback_query):
+    """
+    Уменьшение порога автоматической ротации
+    """
+    try:
+        # Получаем текущий порог
+        current_threshold = int(get_setting("admin_usage_threshold", "50"))
+        
+        # Уменьшаем на 10, но не меньше 10
+        new_threshold = max(10, current_threshold - 10)
+        
+        # Сохраняем новое значение
+        set_setting("admin_usage_threshold", str(new_threshold))
+        
+        await callback_query.answer(f"✅ Порог уменьшен до {new_threshold}")
+        
+        # Возвращаемся в меню управления аккаунтами
+        await admin_accounts_management_callback(client, callback_query)
+    except Exception as e:
+        logger.error(f"Ошибка при уменьшении порога ротации: {e}")
+        await callback_query.answer("❌ Произошла ошибка")
+
+@bot.on_callback_query(filters.regex(r"^force_rotation$"))
+async def force_rotation_callback(client, callback_query):
+    """
+    Принудительная ротация аккаунтов администратора
+    """
+    try:
+        # Получаем текущий активный аккаунт
+        global active_admin_client
+        current_account_id = None
+        
+        if active_admin_client and hasattr(active_admin_client, '_phone'):
+            session = get_session()
+            try:
+                current_account = session.query(AdminAccount).filter_by(phone=active_admin_client._phone).first()
+                if current_account:
+                    current_account_id = current_account.id
+            finally:
+                session.close()
+        
+        # Получаем следующий аккаунт для ротации
+        next_account = get_next_admin_account(current_account_id)
+        
+        if not next_account:
+            await callback_query.answer("❌ Нет доступных аккаунтов для ротации")
+            return
+        
+        # Останавливаем текущий клиент, если он активен
+        if active_admin_client and active_admin_client.is_connected:
+            try:
+                await active_admin_client.stop()
+            except Exception as e:
+                logger.error(f"Ошибка при остановке клиента: {e}")
+        
+        # Сбрасываем клиент
+        active_admin_client = None
+        
+        # Уведомляем о ротации
+        await callback_query.answer(f"✅ Ротация выполнена. Активирован аккаунт {next_account.phone}")
+        
+        # Логирование
+        logger.info(f"Выполнена ручная ротация на аккаунт {next_account.phone}")
+        
+        # Обновляем интерфейс
+        await admin_accounts_management_callback(client, callback_query)
+    except Exception as e:
+        logger.error(f"Ошибка при ручной ротации аккаунтов: {e}")
+        await callback_query.answer("❌ Произошла ошибка при ротации")
+
+@bot.on_callback_query(filters.regex(r"^toggle_account_(\d+)_([01])$"))
+async def toggle_account_callback(client, callback_query):
+    """
+    Активация/деактивация аккаунта администратора
+    """
+    try:
+        # Получаем ID аккаунта и текущий статус из callback_data
+        match = re.match(r"^toggle_account_(\d+)_([01])$", callback_query.data)
+        if not match:
+            await callback_query.answer("❌ Некорректные данные")
+            return
+            
+        account_id = int(match.group(1))
+        is_active = int(match.group(2)) == 1  # 1 означает, что аккаунт активен
+        
+        session = get_session()
+        try:
+            # Получаем аккаунт по ID
+            account = session.query(AdminAccount).filter_by(id=account_id).first()
+            if not account:
+                await callback_query.answer("❌ Аккаунт не найден")
+                return
+                
+            # Изменяем статус аккаунта
+            account.active = not is_active
+            session.commit()
+            
+            # Проверяем, не деактивируем ли мы текущий активный аккаунт
+            if is_active and active_admin_client and hasattr(active_admin_client, '_phone') and active_admin_client._phone == account.phone:
+                # Останавливаем текущий клиент
+                try:
+                    await active_admin_client.stop()
+                except Exception as e:
+                    logger.error(f"Ошибка при остановке клиента: {e}")
+                    
+                # Сбрасываем клиент
+                global active_admin_client
+                active_admin_client = None
+                
+                logger.info(f"Деактивирован текущий активный аккаунт {account.phone}")
+            
+            await callback_query.answer(f"✅ Статус аккаунта {account.phone} изменен")
+            
+            # Обновляем интерфейс
+            await admin_accounts_management_callback(client, callback_query)
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Ошибка при изменении статуса аккаунта: {e}")
+        await callback_query.answer("❌ Произошла ошибка")
+
+@bot.on_callback_query(filters.regex(r"^reset_usage_counters$"))
+async def reset_usage_counters_callback(client, callback_query):
+    """
+    Сброс счетчиков использования всех аккаунтов
+    """
+    try:
+        session = get_session()
+        try:
+            # Сбрасываем счетчики для всех аккаунтов
+            session.query(AdminAccount).update({AdminAccount.usage_count: 0})
+            session.commit()
+            
+            await callback_query.answer("✅ Счетчики использования сброшены")
+            
+            # Обновляем интерфейс
+            await admin_accounts_management_callback(client, callback_query)
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Ошибка при сбросе счетчиков использования: {e}")
+        await callback_query.answer("❌ Произошла ошибка")

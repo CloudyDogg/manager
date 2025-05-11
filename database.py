@@ -216,6 +216,45 @@ def get_rate_limited_users():
         return session.query(RateLimitBlock).filter_by(is_active=True).all()
     finally:
         session.close()
+
+def get_next_admin_account(current_account_id=None):
+    """
+    Получает следующий активный аккаунт администратора для ротации
+    
+    Args:
+        current_account_id: ID текущего активного аккаунта (если известен)
+    
+    Returns:
+        AdminAccount: Следующий активный аккаунт или None, если нет активных аккаунтов
+    """
+    session = Session()
+    try:
+        # Получаем все активные аккаунты, отсортированные по количеству использований
+        active_accounts = session.query(AdminAccount).filter_by(active=True).order_by(AdminAccount.usage_count).all()
+        
+        if not active_accounts:
+            return None
+            
+        # Если нет текущего аккаунта, просто возвращаем аккаунт с наименьшим использованием
+        if current_account_id is None:
+            return active_accounts[0]
+            
+        # Находим индекс текущего аккаунта
+        current_index = -1
+        for i, account in enumerate(active_accounts):
+            if account.id == current_account_id:
+                current_index = i
+                break
+                
+        # Если текущий аккаунт не найден среди активных, возвращаем первый
+        if current_index == -1:
+            return active_accounts[0]
+            
+        # Иначе возвращаем следующий аккаунт (с циклическим переходом)
+        next_index = (current_index + 1) % len(active_accounts)
+        return active_accounts[next_index]
+    finally:
+        session.close()
     
 def init_db():
     Base.metadata.create_all(engine)

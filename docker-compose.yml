@@ -1,0 +1,39 @@
+version: '3'
+
+services:
+  db:
+    image: postgres:13
+    container_name: telegram_bot_db
+    restart: always
+    environment:
+      POSTGRES_USER: telegram_bot
+      POSTGRES_PASSWORD: telegram_bot_password
+      POSTGRES_DB: telegram_bot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telegram_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram_bot
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Переопределение переменной DATABASE_URL для подключения к PostgreSQL
+      DATABASE_URL: postgresql://telegram_bot:telegram_bot_password@db/telegram_bot
+    volumes:
+      - ./bot.log:/app/bot.log
+      - ./screen:/app/screen
+
+volumes:
+  postgres_data: 

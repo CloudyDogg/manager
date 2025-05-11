@@ -64,7 +64,7 @@ class JoinRequest(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer)
     chat_id = Column(Integer)
-    status = Column(String, default="pending")  # pending, approved, rejected
+    status = Column(String, default="pending")  # pending, approved, rejected, link_sent, manual_check, contact_sent
     created_at = Column(DateTime, default=datetime.now)
     approved_by = Column(Integer, nullable=True)  # ID администратора, который обработал заявку
     approved_at = Column(DateTime, nullable=True)  # Время обработки заявки
